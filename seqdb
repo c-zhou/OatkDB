@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+
+# make sure these tools are available in system path
+# seqtk https://github.com/lh3/seqtk
+# Rscript https://www.r-project.org/
+# Python https://www.python.org/
+# mafft https://mafft.cbrc.jp/alignment/software/
+# hmmbuild http://hmmer.org/
+
+SEQDB_VERSION=1.0
+
+## subroutine for help message
+seqdb_usage() {
+    echo ""
+    echo "  Program: seqdb (build profile HMM for a gene from sequence file)"
+    echo "  Version: ${SEQDB_VERSION}"
+    echo ""
+    echo "  Usage: seqdb [options] sequence"
+    echo "  Optional:"
+    echo "      -n|--name     STR    Gene name to write to the HMM file (default auto)."
+    echo "      -t|--threads  INT    Number of threads to use for each parallel job (default 8)."
+    echo "      -p|--protein         The input is protein sequences."
+    echo "      -c|--codon    INT    NCBI genetic code table for translation used for '-p' (default 1)."
+    echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
+    echo "      -f|--force           Overwrite existing files."
+    echo "      -o|--output   STR    Output HMM profile database file (default auto)."
+    echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
+    echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
+    echo "         --resume          Resume a previously unfinished run."
+    echo "         --clean           Clean temporary files when finished."
+    echo "         --log      STR    Log file (default stdout)."
+    echo "      -h|--help            Print this help message."
+    echo "      -v|--version         Print version number."
+    echo ""
+    echo "  1. Refer to NCBI Taxonomy https://www.ncbi.nlm.nih.gov/taxonomy for taxid"
+    echo "  2. Refer to webpage https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi for code table selection"
+    echo "     Commonly used genetic code tables include:"
+    echo "       [1]  The Standard Code"
+    echo "       [2]  The Vertebrate Mitochondrial Code"
+    echo "       [5]  The Invertebrate Mitochondrial Code"
+    echo "       [11] The Bacterial, Archaeal and Plant Plastid Code"
+    echo ""
+    echo "  Example: seqdb -t 12 -c 11 -n rpoc2 -o ./rpoc2.hmm rpo2.fna"
+    echo ""
+}
+
+## subroutine for tool availability checking
+check_tool() {
+    tool=$1; shift
+    site=$1; shift
+    if ! command -v ${tool} &> /dev/null
+    then
+        >&2 echo "Command '${tool}' not found"
+        >&2 echo "It can be installed from ${site}"
+        >&2 echo "If it has been installed, add it to system path"
+        exit 1
+    fi
+}
+
+## subroutine for logging
+info_message() {
+    message=$1; shift
+    dest=$1; shift
+    if [[ -z ${dest} ]]; then dest=${LOGFILE}; fi
+    echo "[$(date +'%Y-%m-%d::%H:%M:%S')] ${message}" >>${dest}
+}
+
+PTH=$( dirname "$0" )
+case "${PTH}" in
+  /* )
+    ;; # already absolute
+  *  )
+    PTH=$(cd "${PTH}" && pwd)
+    ;;
+esac
+
+seqclean="${PTH}/seqclean.R"
+if [ ! -f ${seqclean} ]
+then
+  >&2 echo "ERROR: Unable to find ${seqclean}"
+  exit 1
+fi
+
+aa2nucl="${PTH}/aa2nucl.py"
+if [ ! -f ${aa2nucl} ]
+then
+  >&2 echo "ERROR: Unable to find ${aa2nucl}"
+  exit 1
+fi
+
+## check availabilities of dependencies
+check_tool seqtk https://github.com/lh3/seqtk
+check_tool Rscript https://www.r-project.org/
+check_tool python https://www.python.org/
+check_tool mafft https://mafft.cbrc.jp/alignment/software/
+check_tool hmmbuild http://hmmer.org/
+
+## parameter declaration
+INPUT=""
+GENAME=""
+OUTPUT=""
+THREADS=8
+USEAA=0
+CODON=1
+TEMPDIR=""
+MINSEQ=5
+MAXSEQ=10000
+RESUME=0
+CLEAN=0
+LOGFILE="/dev/stdout"
+FORCE=0
+HELP=0
+VERSION=0
+
+while [[ ${#} -gt 0 ]]
+do
+    key=${1}
+    case ${key} in
+        -n|--name    ) GENAME=${2};   shift; shift;;
+        -t|--threads ) THREADS=${2}; shift; shift;;
+        -p|--protein ) USEAA=1;      shift;;
+        -c|--codon   ) CODON=${2};   shift; shift;;
+        -T|--tmpdir  ) TEMPDIR=${2}; shift; shift;;
+        -f|--force   ) FORCE=1;      shift;;
+        -o|--output  ) OUTPUT=${2};  shift; shift;;
+        --min-seq    ) MINSEQ=${2};  shift; shift;;
+        --max-seq    ) MAXSEQ=${2};  shift; shift;;
+        --resume     ) RESUME=1;     shift;;
+        --clean      ) CLEAN=1;      shift;;
+        --log        ) LOGFILE=${2}; shift; shift;;
+        -h|--help    ) HELP=1;       shift;;
+        -v|--version ) VERSION=1;    shift;;
+        -*|--*=      )
+            >&2 echo "ERROR: unknown options ${1}"
+            >&2 seqdb_usage
+            exit 1;;
+        *            )
+            INPUT=${1};     shift;
+    esac
+done
+
+if [[ ${HELP} -eq 1 ]]; then >&1 seqdb_usage; exit 0; fi
+if [[ ${VERSION} -eq 1 ]]; then >&1 echo ${SEQDB_VERSION}; exit 0; fi
+
+RMTEMPDIR=0
+TEMPFILES=() # a list of temporary files
+
+if [[ -z ${INPUT} ]]
+then
+    >&2 echo "ERROR: requires at least ONE positional parameter"
+    >&2 seqdb_usage
+    exit 1
+fi
+
+INPUTDIR=$(dirname ${INPUT})
+# common FASTA name extensions: .fa, .fasta, .fna, .faa, .ffn, .frn
+INPUTSEQ=$(basename ${INPUT} | sed -E 's/\.(fasta|fna|ffn|faa|frn|fa)$//I')
+
+if [[ -z ${TEMPDIR} ]]
+then
+    TEMPDIR="TEMP_${INPUTSEQ}"
+fi
+
+if [[ ! -d ${TEMPDIR} ]];
+then
+    mkdir -p ${TEMPDIR} 2>/dev/null || \
+        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1);
+    RMTEMPDIR=1 # mark user created TEMPDIR to clean
+fi
+
+if [[ -z ${GENAME} ]]
+then
+    GENAME=${INPUTSEQ}
+    info_message "Using gene name: ${GENAME}."
+fi
+
+if [[ -z ${OUTPUT} ]]
+then
+    OUTPUT="${INPUTDIR}/${GENAME}.hmm"
+    info_message "Using output file name: ${OUTPUT}."
+fi
+
+if [[ -f ${OUTPUT} ]] && [[ ${FORCE} -eq 0 ]]
+then
+    >&2 echo "ERROR: database file ${OUTPUT} exists"
+    >&2 echo "       provide -f|--force option to overwrite"
+    exit 1
+fi
+
+rm -f ${OUTPUT} || \
+    (>&2 echo "ERROR: existing profile HMM file is not overwritable"; exit 1);
+
+EXIT_STATUS=0
+REDO_FROM=0
+OUTPUTPFX="${TEMPDIR}/${GENAME}"
+
+## STEP I first round sequence clean
+if [[ EXIT_STATUS -eq 0 ]]
+then
+    clean1="${OUTPUTPFX}.clean.fna"
+    
+    if [[ ${RESUME} -eq 0 ]]; then rm -f ${clean1}; fi
+    
+    if [[ ! -s ${clean1} ]] || [[ ${REDO_FROM} -gt 0 ]]
+    then
+        info_message "Start first round sequence clean."
+        # get the average sequence length
+        len=$(seqtk seq -l0 ${INPUT} | awk 'BEGIN{B=0; N=0}{if(NR%2==0) {B+=length($1); N++}}END{if(N==0) N=1; print int(B/N)}')
+        # clean sequence
+        # remove sequences containing invalid symbols
+        # remove identical sequences from the same species
+        # remove sequences too long or too short
+        if [[ ${USEAA} -eq 1 ]]
+        then
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
+        else
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
+        fi
+        nseq=$(cat ${clean1} | grep "^>" | wc -l)
+        TEMPFILES+=(${clean1})
+        info_message "First round sequence clean DONE."
+        info_message "[${nseq}] sequences left after clean."
+        # need enough sequences to proceed
+        if [[ ${nseq} -lt ${MINSEQ} ]]
+        then
+            info_message "Not enough sequences to proceed"
+            info_message "Exit."
+            EXIT_STATUS=1
+        fi
+        REDO_FORM=1
+    else
+        info_message "Skip first round sequence clean. Previously DONE."
+    fi
+fi
+
+## STEP II first round sequence alignment
+if [[ EXIT_STATUS -eq 0 ]]
+then
+    align1="${OUTPUTPFX}.clean.maf"
+
+    if [[ ${RESUME} -eq 0 ]]; then rm -f ${align1}; fi
+
+    if [[ ! -s ${align1} ]] || [[ ${REDO_FROM} -gt 0 ]]
+    then
+        info_message "Start first round sequence alignment."
+        # first round alignment
+        mafft --auto --quiet --thread ${THREADS} ${clean1} >${align1} || EXIT_STATUS=2
+        TEMPFILES+=(${align1})
+        info_message "First round sequence alignment DONE."
+        if [[ ${EXIT_STATUS} -eq 2 ]]
+        then
+            info_message "MAFFT alignemnt return ERROR code."
+            info_message "Exit."
+        fi
+        REDO_FROM=2
+    else
+        info_message "Skip first round sequence alignment. Previously DONE."
+    fi
+fi
+
+## STEP III second round sequence clean
+if [[ EXIT_STATUS -eq 0 ]]
+then
+    clean2="${OUTPUTPFX}.clean.2.fna"
+
+    if [[ ${RESUME} -eq 0 ]]; then rm -f ${clean2}; fi
+
+    if [[ ! -s ${clean2} ]]  || [[ ${REDO_FROM} -gt 0 ]]
+    then
+        info_message "Start second round sequence clean."
+        seqtk seq -l0 ${align1} >${align1}.tmpAln
+        # sequence clean by divergence
+        ${seqclean} ${align1}.tmpAln ${MAXSEQ} >${align1}.tmpSeq 2>/dev/null
+        nseq=$(cat ${align1}.tmpSeq | wc -l)
+        seqtk subseq ${clean1}  ${align1}.tmpSeq >${clean2}
+        rm -f ${align1}.tmpAln ${align1}.tmpSeq
+        TEMPFILES+=(${clean2})
+        info_message "Second round sequence clean DONE."
+        info_message "[${nseq}] sequences left after clean."
+        # need enough sequences to proceed
+        if [[ ${nseq} -lt ${MINSEQ} ]]
+        then
+            info_message "Not enough sequences to proceed"
+            info_message "Exit."
+            EXIT_STATUS=3
+        fi
+        REDO_FROM=3
+    else
+        info_message "Skip second round sequence clean. Previously DONE."
+    fi
+fi
+
+## STEP IV second round sequence alignment
+if [[ EXIT_STATUS -eq 0 ]]
+then
+    align2="${OUTPUTPFX}.clean.2.maf"
+    
+    if [[ ${RESUME} -eq 0 ]]; then rm -f ${align2}; fi
+
+    if [[ ! -s ${align2} ]] || [[ ${REDO_FROM} -gt 0 ]]
+    then
+        info_message "Start second round sequence alignment."
+        # second round alignment
+        # will be used for HMM profile construction
+        mafft --auto --quiet --thread ${THREADS} ${clean2} >${align2} || EXIT_STATUS=4
+        TEMPFILES+=(${align2})
+        info_message "Second round sequence alignment DONE."
+        if [[ ${EXIT_STATUS} -eq 4 ]]
+        then
+            info_message "MAFFT alignemnt return ERROR code."
+            info_message "Exit."
+        fi
+        REDO_FROM=4
+    else
+        info_message "Skip second round sequence alignment. Previously DONE."
+    fi
+fi
+
+## STEP V profile HMM construction
+if [[ EXIT_STATUS -eq 0 ]]
+then
+    hmmprof="${OUTPUTPFX}.clean.2.hmm"
+
+    if [[ ${RESUME} -eq 0 ]]; then rm -f ${hmmprof}; fi
+    
+    if [[ ! -s ${hmmprof} ]] || [[ ${REDO_FROM} -gt 0 ]]
+    then
+        info_message "Start profile HMM construction."
+        msa=${align2}
+        if [[ ${USEAA} -eq 1 ]]
+        then
+            info_meassge "  Start AA to NT alignmetn conversion."
+            msa="${OUTPUTPFX}.clean.2.nucl.maf"
+            ${aa2nucl} --codon_table_id ${CODON} ${align2} ${msa} || EXIT_STATUS=5
+            TEMPFILES+=(${msa})
+            info_meassge "  AA to NT alignmetn conversion DONE."
+            if [[ ${EXIT_STATUS} -eq 5 ]]
+            then
+                info_message "AA2NUCL conversion return ERROR code."
+                info_message "Exit."
+            fi
+        fi
+        if [[ EXIT_STATUS -eq 0 ]]
+        then
+            hmmbuild -n ${GENAME} ${hmmprof} ${msa} 1>/dev/null || EXIT_STATUS=5
+            info_message "Profile HMM construction DONE."
+            if [[ ${EXIT_STATUS} -eq 5 ]]
+            then
+                info_message "HMMER build return ERROR code."
+                info_message "Exit."
+            fi
+        fi
+        REDO_FROM=5
+    else
+        info_message "Skip profile HMM construction. Previously DONE."
+    fi
+fi
+
+## FINAL STEP housekeeping postprocessing
+
+if [[ ${EXIT_STATUS} -eq 0 ]] && [[ ! ${hmmprof} -ef ${OUTPUT} ]]
+then
+    cp ${hmmprof} ${OUTPUT}
+    TEMPFILES+=(${hmmprof})
+fi
+
+if [[ ${CLEAN} -eq 1 ]]
+then
+    for f in "${TEMPFILES[@]}"; do rm -rf ${f}; done
+    if [[ ${RMTEMPDIR} -eq 1 ]]; then rm -rf ${TEMPDIR}; fi
+fi
+
+info_message "All DONE."
+

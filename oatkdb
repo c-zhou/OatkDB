@@ -1,0 +1,602 @@
+#!/usr/bin/env bash
+
+# make sure these tools are available in system path
+# seqtk https://github.com/lh3/seqtk
+# Rscript https://www.r-project.org/
+# Python https://www.python.org/
+# mafft https://mafft.cbrc.jp/alignment/software/
+# hmmbuild http://hmmer.org/
+# hmmpress http://hmmer.org/
+# parallel https://www.gnu.org/software/parallel/
+# Entrez Direct: E-utilities on the Unix Command Line
+# https://www.ncbi.nlm.nih.gov/books/NBK179288/
+# sh -c "$(curl -fsSL https://ftp.ncbi.nlm.nih.gov/entrez/entrezdirect/install-edirect.sh)"
+
+OATKDB_VERSION=1.0
+
+## subroutine for help message
+oatkdb_usage() {
+    echo ""
+    echo "  Program: oatkdb (build gene HMM profile database for a NCBI taxonomy)"
+    echo "  Version: ${OATKDB_VERSION}"
+    echo ""
+    echo "  Usage: oatkdb [options] \${taxid} [mitochondrion|chloroplast]"
+    echo "  Optional:"
+    echo "      -j|--jobs     INT    Number of parallel jobs to run (default 1)."
+    echo "      -t|--threads  INT    Number of threads to use for each parallel job (default 8)."
+    echo "      -p|--protein         Use protein instead of nucleotide sequence alignment for coding genes."
+    echo "      -c|--codon    INT    NCBI genetic code table for translation (default 1)."
+    echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
+    echo "      -f|--force           Overwrite existing files."
+    echo "      -o|--output   STR    Output HMM profile database file name prefix (default auto)."
+    echo "         --max-src  INT    Maximum number of source refernce sequences to use (default 0 [no limit])."
+    echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
+    echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
+    echo "         --no-trna         Do not build HMM profiles for tRNA genes."
+    echo "         --no-rrna         Do not build HMM profiles for rRNA genes."
+    echo "         --resume          Resume a previously unfinished run."
+    echo "         --clean           Clean temporary files when finished."
+    echo "         --test            Run program in test mode."
+    echo "         --log      STR    Log file (default stdout)."
+    echo "      -h|--help            Print this help message."
+    echo "      -v|--version         Print version number."
+    echo ""
+    echo "  1. Refer to NCBI Taxonomy https://www.ncbi.nlm.nih.gov/taxonomy for taxid"
+    echo "  2. Refer to webpage https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi for code table selection"
+    echo "     Commonly used genetic code tables include:"
+    echo "       [1]  The Standard Code"
+    echo "       [2]  The Vertebrate Mitochondrial Code"
+    echo "       [5]  The Invertebrate Mitochondrial Code"
+    echo "       [11] The Bacterial, Archaeal and Plant Plastid Code"
+    echo ""
+    echo "  Example: oatkdb -j 4 -t 8 -c 11 -o angiosperms_pltd_v$(date +%Y%m%d) 3398 chloroplast"
+    echo ""
+}
+
+## subroutine for tool availability checking
+check_tool() {
+    tool=$1; shift
+    site=$1; shift
+    if ! command -v ${tool} &> /dev/null
+    then
+        >&2 echo "Command '${tool}' not found"
+        >&2 echo "It can be installed from ${site}"
+        >&2 echo "If it has been installed, add it to system path"
+        exit 1
+    fi
+}
+
+## subroutine for logging
+info_message() {
+    message=$1; shift
+    dest=$1; shift
+    if [[ -z ${dest} ]]; then dest=${LOGFILE}; fi
+    echo "[$(date +'%Y-%m-%d::%H:%M:%S')] ${message}" >>${dest}
+}
+
+# subroutine to allow executing up to $N_PROC jobs in parallel
+EPOCH=$(date +%s)
+wait_until() {
+    N_PROC=$1; shift
+    INTERVAL=$1; shift
+    if [[ -z ${N_PROC} ]]; then N_PROC=${NJOBS}; fi
+    if [[ -z ${INTERVAL} ]]; then INTERVAL=0; fi
+    while [[ $(jobs -r -p | wc -l) -ge ${N_PROC} ]]
+    do
+        # now there are $N_PROC jobs already running, so wait here for any job
+        # to be finished so there is a place to start next one.
+        sleep 10s
+    done
+    # to avoid too frequent request
+    if [[ $(date +%s) -lt $((EPOCH + INTERVAL)) ]]; then sleep ${INTERVAL}s; fi
+    EPOCH=$(date +%s)
+}
+
+PTH=$( dirname "$0" )
+case "${PTH}" in
+  /* )
+    ;; # already absolute
+  *  )
+    PTH=$(cd "${PTH}" && pwd)
+    ;;
+esac
+
+gbparse="${PTH}/gbparse.py"
+if [ ! -f ${gbparse} ]
+then
+  >&2 echo "ERROR: Unable to find ${gbparse}"
+  exit 1
+fi
+
+seqclean="${PTH}/seqclean.R"
+if [ ! -f ${seqclean} ]
+then
+  >&2 echo "ERROR: Unable to find ${seqclean}"
+  exit 1
+fi
+
+aa2nucl="${PTH}/aa2nucl.py"
+if [ ! -f ${aa2nucl} ]
+then
+  >&2 echo "ERROR: Unable to find ${aa2nucl}"
+  exit 1
+fi
+
+## check availabilities of dependencies
+check_tool seqtk https://github.com/lh3/seqtk
+check_tool Rscript https://www.r-project.org/
+check_tool python https://www.python.org/
+check_tool mafft https://mafft.cbrc.jp/alignment/software/
+check_tool hmmbuild http://hmmer.org/
+check_tool hmmpress http://hmmer.org/
+check_tool esearch https://www.ncbi.nlm.nih.gov/books/NBK179288/
+check_tool efetch https://www.ncbi.nlm.nih.gov/books/NBK179288/ 
+check_tool parallel https://www.gnu.org/software/parallel/
+
+## parameter declaration
+TAXID=""
+ORGANELLE=""
+OUTPUT=""
+NJOBS=1
+THREADS=8
+USEAA=0
+CODON=1
+TEMPDIR=""
+MAXSRC=999999999
+MINSEQ=5
+MAXSEQ=10000
+NOTRNA=0
+NORRNA=0
+RESUME=0
+FORCE=0
+CLEAN=0
+TEST=0
+LOGFILE="/dev/stdout"
+HELP=0
+VERSION=0
+
+while [[ ${#} -gt 0 ]]
+do
+    key=${1}
+    case ${key} in
+        -j|--jobs    ) NJOBS=${2};   shift; shift;;
+        -t|--threads ) THREADS=${2}; shift; shift;;
+        -p|--protein ) USEAA=1;      shift;;
+        -c|--codon   ) CODON=${2};   shift; shift;;
+        -T|--tmpdir  ) TEMPDIR=${2}; shift; shift;;
+        -f|--force   ) FORCE=1;      shift;;
+        -o|--output  ) OUTPUT=${2};  shift; shift;;
+        --max-src    ) MAXSRC=${2};  shift; shift;;
+        --min-seq    ) MINSEQ=${2};  shift; shift;;
+        --max-seq    ) MAXSEQ=${2};  shift; shift;;
+        --no-trna    ) NOTRNA=1;     shift;;
+        --no-rrna    ) NORRNA=1;     shift;;
+        --resume     ) RESUME=1;     shift;;
+        --clean      ) CLEAN=1;      shift;;
+        --test       ) TEST=1;       shift;;
+        --log        ) LOGFILE=${2}; shift; shift;;
+        -h|--help    ) HELP=1;       shift;;
+        -v|--version ) VERSION=1;    shift;;
+        -*|--*=      )
+            >&2 echo "ERROR: unknown options ${1}"
+            >&2 oatkdb_usage
+            exit 1;;
+        *            )
+            TAXID=${1};     shift;
+            ORGANELLE=${1}; shift;
+    esac
+done
+
+if [[ ${HELP} -eq 1 ]]; then >&1 oatkdb_usage; exit 0; fi
+if [[ ${VERSION} -eq 1 ]]; then >&1 echo ${OATKDB_VERSION}; exit 0; fi
+
+NCORE=$((NJOBS * THREADS))
+RMTEMPDIR=0
+TEMPFILES=() # a list of temporary files 
+
+if [[ -z ${TAXID} ]] || [[ -z ${ORGANELLE} ]]
+then
+    >&2 echo "ERROR: requires at least TWO positional parameters"
+    >&2 oatkdb_usage
+    exit 1
+fi
+
+if [[ ${ORGANELLE} != "mitochondrion" ]] && [[ ${ORGANELLE} != "chloroplast" ]]
+then
+    >&2 echo "ERROR: organelle must be 'mitochondrion' or 'chloroplast'"
+    >&2 oatkdb_usage
+    exit 1
+fi
+
+if [[ -z ${OUTPUT} ]]
+then
+    if [[ ${ORGANELLE} == "mitochondrion" ]]
+    then
+        OUTPUT="${TAXID}_MITO_v$(date +%Y%m%d)"
+    else
+        OUTPUT="${TAXID}_PLTD_v$(date +%Y%m%d)"
+    fi
+else
+    outdir=$(dirname ${OUTPUT})
+    mkdir -p ${outdir} 2>/dev/null || \
+        (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1);
+fi
+
+if [[ -f ${OUTPUT}.fam ]] && [[ ${FORCE} -eq 0 ]]
+then
+    >&2 echo "ERROR: database file '${OUTPUT}.fam' exists"
+    >&2 echo "       provide -f|--force option to overwrite"
+    exit 1
+fi
+
+rm -f ${OUTPUT}.fam ${OUTPUT}.fam.h3f ${OUTPUT}.fam.h3i ${OUTPUT}.fam.h3m ${OUTPUT}.fam.h3p || \
+    (>&2 echo "ERROR: existing profile database files are not overwritable"; exit 1);
+
+if [[ -z ${TEMPDIR} ]]
+then
+    if [[ ${ORGANELLE} == "mitochondrion" ]]
+    then
+        TEMPDIR="TEMP_${TAXID}_MITO_v$(date +%Y%m%d)"
+    else
+        TEMPDIR="TEMP_${TAXID}_PLTD_v$(date +%Y%m%d)"
+    fi
+fi
+
+## run program in test mode
+if [[ ${TEST} -eq 1 ]]; then MAXSRC=10; MINSEQ=2; MAXSEQ=10; fi
+
+if [[ ! -d ${TEMPDIR} ]];
+then
+    mkdir -p ${TEMPDIR} 2>/dev/null || \
+        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1);
+    RMTEMPDIR=1 # mark user created TEMPDIR to clean
+fi
+
+## remove checkpoint files if not in RESUME mode
+if [[ ${RESUME} -eq 0 ]]; then rm -f ${TEMPDIR}/[1-6].done; fi
+
+clean_checkpoint () {
+    stage=$1; shift
+    tmpdir=$1; shift
+    if [[ -z ${tmpdir} ]]; then tmpdir=${TEMPDIR}; fi
+    for s in $(seq ${stage} 6)
+    do
+        rm -f ${tmpdir}/${s}.done
+    done
+}
+
+STAGE=0
+
+#*******************************************************************
+#*************** MODULE I. DOWNLOAD SOURCE SEQUENCES ***************
+#*******************************************************************
+STAGE=$((STAGE+1))
+rawMetaFile="${TEMPDIR}/tmp_rawGBFile.meta"
+rawGBFile="${TEMPDIR}/tmp_rawGBFile.gb"
+efetchJobList="${TEMPDIR}/tmp_efetchJobs"
+efetchJobFailed="${TEMPDIR}/tmp_efetchJobs.failed"
+efetchJobFailed2="${TEMPDIR}/tmp_efetchJobs.failed.2"
+checkpoint="${TEMPDIR}/1.done"
+
+TEMPFILES+=(${rawMetaFile})
+TEMPFILES+=(${rawGBFile})
+TEMPFILES+=(${efetchJobList})
+TEMPFILES+=(${efetchJobFailed})
+TEMPFILES+=(${efetchJobFailed2})
+TEMPFILES+=(${checkpoint})
+
+efetch_post () {
+    infile=$1;  shift
+    outfile=$1; shift
+    errfile=$1; shift
+    errmsg=$1;  shift
+    # a naive way to check if it is a valid GenBank file
+    while IFS= read -r header; do if [[ -n ${header} ]]; then break; fi; done < ${infile}
+    while IFS= read -r tailer; do if [[ -n ${tailer} ]]; then break; fi; done < <(tac ${infile})
+    if [[ ! -z $(echo ${header} | grep "^LOCUS") ]] && [[ ! -z $(echo ${tailer} | grep "^\/\/") ]]
+    then
+        # synchronize access already gurrantteed
+        cat ${infile} >>${outfile}
+    else
+        flock -x ${errfile} -c "echo \"${errmsg}\" >>${errfile}"
+    fi
+    rm ${infile}
+}
+
+export -f efetch_post
+
+info_message "Stage ${STAGE}: download source sequences"
+if [[ ! -f ${checkpoint} ]] || [[ ! -f ${rawGBFile} ]]
+then
+    clean_checkpoint ${STAGE}
+    rm -f ${rawGBFile}* ${efetchJobList} ${efetchJobFailed} ${efetchJobFailed2}
+    info_message "  Start downloading source sequences."
+    info_message "    Downloading metafile..."
+    query_str="txid${TAXID} [Organism] AND ${ORGANELLE} [Filter]"
+    esearch -db nuccore -query "${query_str}" | \
+        efetch -format acc >${rawMetaFile}
+    info_message "    Downloading metafile DONE."
+    nSRC=$(cat ${rawMetaFile} | wc -l)
+    if [[ ${nSRC} -gt ${MAXSRC} ]]; then nSRC=${MAXSRC}; fi
+    nBAT=1000
+    for i in $(seq 1 ${nBAT} ${nSRC});
+    do
+        nID=${nBAT}
+        if [[ $((i+nID)) -gt ${nSRC} ]]; then nID=$((nSRC-i+1)); fi
+        IDList=$(tail -n +${i} ${rawMetaFile} | head -${nID} | paste -sd ',')
+        echo ${IDList}
+    done >${efetchJobList}
+    nJOB=$(cat ${efetchJobList} | wc -l)
+    touch ${efetchJobFailed}
+    info_message "    Downloading [${nSRC}] reference files..."
+    info_message "      Running ${NCORE} parallel jobs."
+    info_message "      Using 1 core per job."
+    info_message "      [${nJOB}] jobs to run."
+    parallel -j${NCORE} --delay 1 -a ${efetchJobList} \
+        "efetch -db nuccore -format gb -chunk ${nBAT} -id {} >${rawGBFile}.T{%}.tmp; 
+        efetch_post ${rawGBFile}.T{%}.tmp ${rawGBFile}.T{%} ${efetchJobFailed} {}"
+    nJOB=$(cat ${efetchJobFailed} | wc -l)
+    if [[ ${nJOB} -gt 0 ]]
+    then
+        touch ${efetchJobFailed2}
+        info_message "      Second try for ${nJOB} failed jobs."
+        info_message "      [${nJOB}] jobs to run."
+        parallel -j${NCORE} --delay 1 -a ${efetchJobFailed} \
+            "efetch -db nuccore -format gb -chunk ${nBAT} -id {} >${rawGBFile}.T{%}.tmp; 
+            efetch_post ${rawGBFile}.T{%}.tmp ${rawGBFile}.T{%} ${efetchJobFailed2} {}"
+        nFAIL=$(cat ${efetchJobFailed2} | wc -l)
+        info_message "      Second try DONE."
+        info_message "      ${nFAIL} jobs failed again."
+    fi
+    info_message "    Downloading [${nSRC}] reference files DONE."
+    cat ${rawGBFile}.T* >${rawGBFile} && rm ${rawGBFile}.T*
+    info_message "  Downloading source sequences DONE."
+    touch ${checkpoint}
+else
+    info_message "  Skip downloading source sequences. Previously DONE."
+fi
+info_message "Stage ${STAGE} DONE."
+
+#*******************************************************************
+#****************** MODULE II. PARSE GENBANK FILES *****************
+#*******************************************************************
+STAGE=$((STAGE+1))
+parsedGBFile="${TEMPDIR}/tmp_GBFile.parsed"
+summaryFile="${TEMPDIR}/tmp_GBFile.summary"
+checkpoint="${TEMPDIR}/2.done"
+
+TEMPFILES+=(${parsedGBFile})
+TEMPFILES+=(${summaryFile})
+TEMPFILES+=(${checkpoint})
+
+info_message "Stage ${STAGE}: parse GenBank files"
+if [[ ! -f ${checkpoint} ]] || [[ ! -f ${parsedGBFile} ]] || [[ ! -f ${summaryFile} ]]
+then
+    clean_checkpoint ${STAGE}
+    info_message "  Start parsing GenBank files."
+    CMD="${gbparse} ${rawGBFile} ${parsedGBFile} ${summaryFile} --genetic_code ${CODON}"
+    if [[ ${USEAA} -eq 1 ]]; then CMD=${CMD}" --translate"; fi
+    if [[ ${NOTRNA} -eq 1 ]]; then CMD=${CMD}" --no_tRNA"; fi
+    if [[ ${NORRNA} -eq 1 ]]; then CMD=${CMD}" --no_rRNA"; fi
+    info_message "    Running CMD: ${CMD}"
+    eval ${CMD}
+    info_message "  Parsing GenBank files DONE."
+    touch ${checkpoint}
+else
+    info_message "  Skip parsing GenBank files. Previously DONE."
+fi
+info_message "Stage ${STAGE} DONE."
+
+#*******************************************************************
+#***************** MODULE III. PARSE GENE SEQUENCES ****************
+#*******************************************************************
+STAGE=$((STAGE+1))
+geneListFile="${TEMPDIR}/tmp_Gene.list"
+geneSeqDir="${TEMPDIR}/tmp_GeneSeqs"
+checkpoint="${TEMPDIR}/3.done"
+
+TEMPFILES+=(${geneListFile})
+TEMPFILES+=(${geneSeqDir})
+TEMPFILES+=(${checkpoint})
+
+extract_seqs () {
+    sFile=${1}; shift
+    gFile=${1}; shift
+    tGene=${1}; shift
+    mSeq=${1};  shift
+    sDir=${1};  shift
+    sList=${1}; shift
+    info_message "    Processing ${tGene} genes"
+    # find sequence count threshold mSeq=MAX(MINSEQ, N80/5)
+    tSeq=$(cat ${sFile} | grep "^${tGene}" | awk '{n+=$3}END{print n}')
+    mSeq=$(cat ${sFile} | grep "^${tGene}" | sort -k3n,3r | \
+        awk -v M=${mSeq} -v N=${tSeq} \
+        'BEGIN{n=0; s=0; N*=0.8}{if(n<N) s=$3; n+=$3}END{s=int(s*0.2); if(s<M) s=M; print s}')
+    cat ${sFile} | grep "^${tGene}" | awk -v M=${mSeq} '{if($3>=M) print $0}' >> ${sList}
+    nSeq=$(cat ${sList} | grep "^${tGene}" | wc -l)
+    info_message "      gene sequence count threshold ${mSeq}."
+    info_message "      ${nSeq} ${tGene} genes retrieved."
+    info_message "      dump sequences for each gene to an individual file."
+    sDir="${sDir}/${tGene}"
+    mkdir -p ${sDir}
+    rm -f ${sDir}/*
+    awk -v T=${tGene} -v D=${sDir} \
+        'NR==FNR{if($1==T) t[$2]=1; next} {if($1==T&&t[$2]) print ">"$2"_"$3"_"$4" "$3"\n"$5 >D"/"$2".fna"}' \
+        ${sList} ${gFile}
+    info_message "    Processing ${tGene} genes DONE."
+}
+
+info_message "Stage ${STAGE}: parse gene sequences"
+if [[ ! -f ${checkpoint} ]] || [[ ! -f ${geneListFile} ]]
+then
+    clean_checkpoint ${STAGE}
+    mkdir -p ${geneSeqDir}
+    rm -rf ${geneSeqDir}/*
+    rm -f ${geneListFile}
+    info_message "  Start parsing gene sequences."
+    echo -e "#Type\tGene\tCount" >${geneListFile}
+    extract_seqs ${summaryFile} ${parsedGBFile} "CDS" ${MINSEQ} ${geneSeqDir} ${geneListFile}
+    if [[ ${NOTRNA} -eq 0 ]]
+    then
+        extract_seqs ${summaryFile} ${parsedGBFile} "tRNA" ${MINSEQ} ${geneSeqDir} ${geneListFile}
+    fi
+    if [[ ${NORRNA} -eq 0 ]]
+    then
+        extract_seqs ${summaryFile} ${parsedGBFile} "rRNA" ${MINSEQ} ${geneSeqDir} ${geneListFile}
+    fi
+    info_message "  Parsing gene sequences DONE."
+    touch ${checkpoint}
+else
+    info_message "  Skip parsing gene sequences. Previously DONE."
+fi
+info_message "Stage ${STAGE} DONE."
+
+#*******************************************************************
+#************* MODULE IV. SEQUENCE CLEAN AND ALIGNMENT *************
+#*******************************************************************
+STAGE=$((STAGE+1))
+checkpoint="${TEMPDIR}/4.done"
+
+TEMPFILES+=(${checkpoint})
+
+sequence_clean () {
+    gType=$1; shift
+    gName=$1; shift
+    sDir=$1;  shift
+    aaSeq=$1; shift
+    mnSeq=$1; shift
+    mmSeq=$1; shift
+    nProc=$1; shift
+    pfx="${sDir}/${gType}/${gName}"
+    fna="${pfx}.fna"
+    # get the average sequence length
+    len=$(seqtk seq -l0 $fna | awk 'BEGIN{B=0; N=0}{if(NR%2==0) {B+=length($1); N++}}END{if(N==0) N=1; print int(B/N)}')
+    # clean sequence: remove sequences containing invalid symbols, remove identical sequences from the same species, remove sequences too long or too short
+    if [[ ${aaSeq} -eq 1 ]]
+    then
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
+    else
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
+    fi
+    nseq=$(cat ${pfx}.clean.fna | grep "^>" | wc -l)
+    # need enough sequences to proceed
+    if [[ ${nseq} -lt ${mnSeq} ]]; then exit 0; fi
+    # first round alignment
+    mafft --auto --quiet --thread ${nProc} ${pfx}.clean.fna >${pfx}.clean.maf
+    seqtk seq -l0 ${pfx}.clean.maf >${pfx}.clean.maf.tmp
+    # sequence clean by divergence
+    ${seqclean} ${pfx}.clean.maf.tmp ${mmSeq} >${pfx}.clean.maf.tmp.seq 2>/dev/null
+    nseq=$(cat ${pfx}.clean.maf.tmp.seq | wc -l)
+    seqtk subseq ${pfx}.clean.fna ${pfx}.clean.maf.tmp.seq >${pfx}.clean.2.fna
+    rm ${pfx}.clean.maf.tmp ${pfx}.clean.maf.tmp.seq
+    # need enough sequences to proceed
+    if [[ ${nseq} -lt ${mnSeq} ]]; then exit 0; fi
+    # second round alignment
+    # will be used for HMM profile construction
+    mafft --auto --quiet --thread ${nProc} ${pfx}.clean.2.fna >${pfx}.clean.2.maf
+}
+
+J=1 # job interval to verbose
+info_message "Stage ${STAGE}: clean and align gene sequences"
+if [[ ! -f ${checkpoint} ]]
+then
+    clean_checkpoint ${STAGE}
+    nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
+    info_message "  Start cleaning and aligning gene sequences."
+    info_message "    Running ${NJOBS} parallel jobs."
+    info_message "    Using ${THREADS} cores per job."
+    info_message "    [${nSEQ}] jobs to run."
+    for i in $(seq 1 ${nSEQ})
+    do
+        wait_until
+        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
+        if [[ $((i%J)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gName}."; fi
+        sequence_clean ${gType} ${gName} ${geneSeqDir} ${USEAA} ${MINSEQ} ${MAXSEQ} ${THREADS} &
+    done
+    wait
+    info_message "  Cleaning and aligning gene sequences DONE."
+    touch ${checkpoint}
+else
+    info_message "  Skip cleaning and aligning gene sequences. Previously DONE."
+fi
+info_message "Stage ${STAGE} DONE."
+
+#*******************************************************************
+#**************** MODULE V. PROFILE HMM CONSTRUCTION ***************
+#*******************************************************************
+STAGE=$((STAGE+1))
+hmmDBName="${TEMPDIR}/tmp_DB.fam"
+checkpoint="${TEMPDIR}/5.done"
+
+TEMPFILES+=(${hmmDBName})
+TEMPFILES+=(${checkpoint})
+
+hmm_build () {
+    gType=$1; shift
+    gName=$1; shift
+    sDir=$1;  shift
+    aaSeq=$1; shift
+    pfx="${sDir}/${gType}/${gName}"
+    msa="${pfx}.clean.2.maf"
+    # MSA does not exist
+    if [[ ! -f ${msa} ]]; then exit 0; fi
+    # convert AA alignment to NT alignment
+    # as described https://academic.oup.com/bioinformatics/article/31/11/1836/2365396
+    if [[ ${gType} == "CDS" ]] && [[ ${aaSeq} -eq 1 ]]
+    then
+        ${aa2nucl} --codon_table_id ${CODON} ${mas} ${pfx}.clean.2.nucl.maf
+        msa="${pfx}.clean.2.nucl.maf"
+        TEMPFILES+=(${msa})
+    fi
+    hmmbuild -n ${gName} ${pfx}.clean.2.hmm ${msa} 1>/dev/null
+}
+
+J=10 # job interval to verbose
+info_message "Stage ${STAGE}: profile HMM construction"
+if [[ ! -f ${checkpoint} ]]
+then
+    clean_checkpoint ${STAGE}
+    rm -f ${hmmDBName}
+    nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
+    info_message "  Start constructing HMM profiles."
+    info_message "    Running ${NCORE} parallel jobs."
+    info_message "    Using 1 core per job."
+    info_message "    [${nSEQ}] jobs to run."
+    for i in $(seq 1 ${nSEQ})
+    do
+        wait_until ${NCORE}
+        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
+        if [[ $((i%10)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gName}."; fi
+        hmm_build ${gType} ${gName} ${geneSeqDir} ${USEAA} &
+    done
+    wait
+    info_message "    Collecting individual HMM profile for each gene."
+    for i in $(seq 1 ${nSEQ})
+    do
+        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
+        hmmfile="${geneSeqDir}/${gType}/${gName}.clean.2.hmm"
+        if [[ -f  ${hmmfile} ]]; then cat ${hmmfile} >> ${hmmDBName}; fi
+    done
+    info_message "    Collecting individual HMM profiles DONE."
+    info_message "    Making HMM database."
+    cp ${hmmDBName} ${OUTPUT}.fam
+    hmmpress ${OUTPUT}.fam 1>/dev/null
+    info_message "    Making HMM database DONE."
+    info_message "  Constructing HMM profiles DONE."
+    touch ${checkpoint}
+else
+    info_message "  Skip constructing HMM profiles. Previously DONE."
+fi
+info_message "Stage ${STAGE} DONE."
+
+#*******************************************************************
+#********************** MODULE VI. FINAL CLEAN *********************
+#*******************************************************************
+if [[ ${CLEAN} -eq 1 ]]
+then
+    for f in "${TEMPFILES[@]}"; do rm -rf ${f}; done
+    if [[ ${RMTEMPDIR} -eq 1 ]]; then rm -rf ${TEMPDIR}; fi
+fi
+
+info_message "All DONE."
+

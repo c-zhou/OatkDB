@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+
+# make sure these tools are available in system path
+# hmmpress http://hmmer.org/
+
+CURATE_VERSION=1.0
+
+## subroutine for help message
+curate_usage() {
+    echo ""
+    echo "  Program: curate (curate OatkDB gene HMM profile database)"
+    echo "  Version: ${CURATE_VERSION}"
+    echo ""
+    echo "  Usage: curate [options] gene_list tmpdir output"
+    echo "  Optional:"
+    echo "      -f|--force           Overwrite existing files."
+    echo "         --log      STR    Log file (default stdout)."
+    echo "      -h|--help            Print this help message."
+    echo "      -v|--version         Print version number."
+    echo ""
+    echo "  Example: curate gene_list tmpdir angiosperms_pltd_v$(date +%Y%m%d)"
+    echo ""
+}
+
+## subroutine for tool availability checking
+check_tool() {
+    tool=$1; shift
+    site=$1; shift
+    if ! command -v ${tool} &> /dev/null
+    then
+        >&2 echo "Command '${tool}' not found"
+        >&2 echo "It can be installed from ${site}"
+        >&2 echo "If it has been installed, add it to system path"
+        exit 1
+    fi
+}
+
+## subroutine for logging
+info_message() {
+    message=$1; shift
+    dest=$1; shift
+    if [[ -z ${dest} ]]; then dest=${LOGFILE}; fi
+    echo "[$(date +'%Y-%m-%d::%H:%M:%S')] ${message}" >>${dest}
+}
+
+## check availabilities of dependencies
+check_tool hmmpress http://hmmer.org/
+
+## parameter declaration
+GENLIST=""
+TEMPDIR=""
+OUTPUT=""
+FORCE=0
+LOGFILE="/dev/stdout"
+HELP=0
+VERSION=0
+
+while [[ ${#} -gt 0 ]]
+do
+    key=${1}
+    case ${key} in
+        -f|--force   ) FORCE=1;      shift;;
+        --log        ) LOGFILE=${2}; shift; shift;;
+        -h|--help    ) HELP=1;       shift;;
+        -v|--version ) VERSION=1;    shift;;
+        -*|--*=      )
+            >&2 echo "ERROR: unknown options ${1}"
+            >&2 curate_usage
+            exit 1;;
+        *            )
+            GENLIST=${1};  shift;
+            TEMPDIR=${1};  shift;
+            OUTPUT=${1};   shift;
+    esac
+done
+
+if [[ ${HELP} -eq 1 ]]; then >&1 curate_usage; exit 0; fi
+if [[ ${VERSION} -eq 1 ]]; then >&1 echo ${CURATE_VERSION}; exit 0; fi
+
+if [[ -z ${GENLIST} ]] || [[ -z ${TEMPDIR} ]] || [[ -z ${OUTPUT} ]]
+then
+    >&2 echo "ERROR: requires at least THREE positional parameters"
+    >&2 curate_usage
+    exit 1
+fi
+
+if [[ -f ${OUTPUT}.fam ]] && [[ ${FORCE} -eq 0 ]]
+then
+    >&2 echo "ERROR: database file '${OUTPUT}.fam' exists"
+    >&2 echo "       provide -f|--force option to overwrite"
+    exit 1
+fi
+
+rm -f ${OUTPUT}.fam ${OUTPUT}.fam.h3f ${OUTPUT}.fam.h3i ${OUTPUT}.fam.h3m ${OUTPUT}.fam.h3p || \
+    (>&2 echo "ERROR: existing profile database files are not overwritable"; exit 1);
+
+if [[ ! -f ${GENLIST} ]]
+then
+    >&2 echo "ERROR: gene list file '${GENLIST}' not found"
+    exit 1
+fi
+
+if [[ ! -d ${TEMPDIR} ]]
+then
+    >&2 echo "ERROR: temp dir '${TEMPDIR}' not found"
+    exit 1
+fi
+
+outdir=$(dirname ${OUTPUT})
+mkdir -p ${outdir} 2>/dev/null || \
+    (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1);
+
+hmmDBName="${TEMPDIR}/tmp_DB.fam"
+geneSeqDir="${TEMPDIR}/tmp_GeneSeqs"
+
+if [[ ! -d ${geneSeqDir} ]]
+then
+    >&2 echo "ERROR: gene seq dir '${geneSeqDir}' not found"
+    exit 1
+fi
+
+rm -f ${hmmDBName}
+nSEQ=$(cat ${GENLIST} | grep -v "^#" | wc -l)
+nGEN=0
+
+info_message "Starting HMM profile database curation."
+info_message "  Collecting individual HMM profile for each gene."
+for i in $(seq 1 ${nSEQ})
+do
+    read -r gType gName gCount<<< $(cat ${GENLIST} | grep -v "^#" | head -${i} | tail -1)
+    hmmfile="${geneSeqDir}/${gType}/${gName}.clean.2.hmm"
+    if [[ -f  ${hmmfile} ]]; then cat ${hmmfile} >> ${hmmDBName}; nGEN=$((nGEN+1)); fi
+done
+info_message "    [${nGEN}] genes collected."
+info_message "  Collecting individual HMM profiles DONE."
+info_message "  Making HMM database."
+cp ${hmmDBName} ${OUTPUT}.fam
+hmmpress ${OUTPUT}.fam 1>/dev/null
+info_message "  Making HMM database DONE."
+info_message "HMM profile database curation DONE."
+info_message "All DONE."
+
