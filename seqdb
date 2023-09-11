@@ -161,10 +161,10 @@ then
     TEMPDIR="TEMP_${INPUTSEQ}"
 fi
 
-if [[ ! -d ${TEMPDIR} ]];
+if [[ ! -d ${TEMPDIR} ]]
 then
     mkdir -p ${TEMPDIR} 2>/dev/null || \
-        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1);
+        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1)
     RMTEMPDIR=1 # mark user created TEMPDIR to clean
 fi
 
@@ -188,7 +188,7 @@ then
 fi
 
 rm -f ${OUTPUT} || \
-    (>&2 echo "ERROR: existing profile HMM file is not overwritable"; exit 1);
+    (>&2 echo "ERROR: existing profile HMM file is not overwritable"; exit 1)
 
 EXIT_STATUS=0
 REDO_FROM=0

@@ -17,7 +17,7 @@ OATKDB_VERSION=1.0
 ## subroutine for help message
 oatkdb_usage() {
     echo ""
-    echo "  Program: oatkdb (build gene HMM profile database for a NCBI taxonomy)"
+    echo "  Program: oatkdb (build gene HMM profile database for an NCBI taxonomy)"
     echo "  Version: ${OATKDB_VERSION}"
     echo ""
     echo "  Usage: oatkdb [options] \${taxid} [mitochondrion|chloroplast]"
@@ -29,7 +29,7 @@ oatkdb_usage() {
     echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
     echo "      -f|--force           Overwrite existing files."
     echo "      -o|--output   STR    Output HMM profile database file name prefix (default auto)."
-    echo "         --max-src  INT    Maximum number of source refernce sequences to use (default 0 [no limit])."
+    echo "         --max-src  INT    Maximum number of source reference sequences to use (default 0 [no limit])."
     echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
     echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
     echo "         --no-trna         Do not build HMM profiles for tRNA genes."
@@ -219,7 +219,7 @@ then
 else
     outdir=$(dirname ${OUTPUT})
     mkdir -p ${outdir} 2>/dev/null || \
-        (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1);
+        (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1)
 fi
 
 if [[ -f ${OUTPUT}.fam ]] && [[ ${FORCE} -eq 0 ]]
@@ -230,7 +230,7 @@ then
 fi
 
 rm -f ${OUTPUT}.fam ${OUTPUT}.fam.h3f ${OUTPUT}.fam.h3i ${OUTPUT}.fam.h3m ${OUTPUT}.fam.h3p || \
-    (>&2 echo "ERROR: existing profile database files are not overwritable"; exit 1);
+    (>&2 echo "ERROR: existing profile database files are not overwritable"; exit 1)
 
 if [[ -z ${TEMPDIR} ]]
 then
@@ -245,10 +245,10 @@ fi
 ## run program in test mode
 if [[ ${TEST} -eq 1 ]]; then MAXSRC=10; MINSEQ=2; MAXSEQ=10; fi
 
-if [[ ! -d ${TEMPDIR} ]];
+if [[ ! -d ${TEMPDIR} ]]
 then
     mkdir -p ${TEMPDIR} 2>/dev/null || \
-        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1);
+        (>&2 echo "Create tempdir '${TEMPDIR}' failed"; exit 1)
     RMTEMPDIR=1 # mark user created TEMPDIR to clean
 fi
 
@@ -319,7 +319,7 @@ then
     nSRC=$(cat ${rawMetaFile} | wc -l)
     if [[ ${nSRC} -gt ${MAXSRC} ]]; then nSRC=${MAXSRC}; fi
     nBAT=1000
-    for i in $(seq 1 ${nBAT} ${nSRC});
+    for i in $(seq 1 ${nBAT} ${nSRC})
     do
         nID=${nBAT}
         if [[ $((i+nID)) -gt ${nSRC} ]]; then nID=$((nSRC-i+1)); fi
