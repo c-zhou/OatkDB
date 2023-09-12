@@ -110,8 +110,8 @@ outdir=$(dirname ${OUTPUT})
 mkdir -p ${outdir} 2>/dev/null || \
     (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1)
 
-hmmDBName="${TEMPDIR}/tmp_DB.fam"
-geneSeqDir="${TEMPDIR}/tmp_GeneSeqs"
+hmmDBName="${TEMPDIR}/DB.fam"
+geneSeqDir="${TEMPDIR}/GeneSeqs"
 
 if [[ ! -d ${geneSeqDir} ]]
 then

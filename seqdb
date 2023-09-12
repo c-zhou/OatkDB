@@ -24,6 +24,7 @@ seqdb_usage() {
     echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
     echo "      -f|--force           Overwrite existing files."
     echo "      -o|--output   STR    Output HMM profile database file (default auto)."
+    echo "         --max-src  INT    Maximum number of source gene sequences to use (default 100000)."
     echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
     echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
     echo "         --resume          Resume a previously unfinished run."
@@ -65,6 +66,31 @@ info_message() {
     echo "[$(date +'%Y-%m-%d::%H:%M:%S')] ${message}" >>${dest}
 }
 
+## subroutine to check FASTA type NT or AA
+check_fna () {
+    fna=$1; shift
+    ftype=$1; shift
+    aa=$(cat ${fna} | grep -v "^>" | grep -o -P "[ARNDCQEGHILKMFPSTWYVX]" | wc -l)
+    nt=$(cat ${fna} | grep -v "^>" | grep -o -P "[ACGTUN]" | wc -l)
+    stype=$(awk -v aa=${aa} -v nt=${nt} 'BEGIN{
+        if (aa==0) {
+            print "unknown";
+        } else {
+            if (nt/aa > 0.9)
+                print "NT"; 
+            else 
+                print "AA";
+        }
+    }')
+    if [[ ${stype} == "unknown" ]]
+    then
+        info_message "WARN: unknown FASTA file type."
+    elif [[ ${stype} != ${ftype} ]]
+    then
+        info_message "WARN: inferred FASTA file type (${stype}) does not match the specified type (${ftype})."
+    fi
+}
+
 PTH=$( dirname "$0" )
 case "${PTH}" in
   /* )
@@ -103,6 +129,7 @@ THREADS=8
 USEAA=0
 CODON=1
 TEMPDIR=""
+MAXSRC=100000
 MINSEQ=5
 MAXSEQ=10000
 RESUME=0
@@ -123,6 +150,7 @@ do
         -T|--tmpdir  ) TEMPDIR=${2}; shift; shift;;
         -f|--force   ) FORCE=1;      shift;;
         -o|--output  ) OUTPUT=${2};  shift; shift;;
+        --max-src    ) MAXSRC=${2};  shift; shift;;
         --min-seq    ) MINSEQ=${2};  shift; shift;;
         --max-seq    ) MAXSEQ=${2};  shift; shift;;
         --resume     ) RESUME=1;     shift;;
@@ -151,6 +179,10 @@ then
     >&2 seqdb_usage
     exit 1
 fi
+
+FTYPE="NT"
+if [[ ${USEAA} -eq 1 ]]; then FTYPE="AA"; fi
+check_fna ${INPUT} ${FTYPE}
 
 INPUTDIR=$(dirname ${INPUT})
 # common FASTA name extensions: .fa, .fasta, .fna, .faa, .ffn, .frn
@@ -210,11 +242,13 @@ then
         # remove sequences containing invalid symbols
         # remove identical sequences from the same species
         # remove sequences too long or too short
+        # maximum MAXSRC sequences to keep
+        mLine=$((MAXSRC*2))
         if [[ ${USEAA} -eq 1 ]]
         then
-            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mLine} >${clean1}
         else
-            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mLine} >${clean1}
         fi
         nseq=$(cat ${clean1} | grep "^>" | wc -l)
         TEMPFILES+=(${clean1})
@@ -329,11 +363,11 @@ then
         msa=${align2}
         if [[ ${USEAA} -eq 1 ]]
         then
-            info_meassge "  Start AA to NT alignmetn conversion."
+            info_message "  Start AA to NT alignmetn conversion."
             msa="${OUTPUTPFX}.clean.2.nucl.maf"
             ${aa2nucl} --codon_table_id ${CODON} ${align2} ${msa} || EXIT_STATUS=5
             TEMPFILES+=(${msa})
-            info_meassge "  AA to NT alignmetn conversion DONE."
+            info_message "  AA to NT alignmetn conversion DONE."
             if [[ ${EXIT_STATUS} -eq 5 ]]
             then
                 info_message "AA2NUCL conversion return ERROR code."

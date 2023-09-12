@@ -116,7 +116,7 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, check_codon,
     
     return genes
 
-def main(input_genbank_file, output_file, summary_file, genetic_code, no_rRNA, no_tRNA, check_codon, translate):
+def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_code, gene_alias, no_rRNA, no_tRNA, include_ORF, check_codon, translate):
     gene_list = []
     gene_counts = defaultdict(int)
     '''
@@ -195,11 +195,13 @@ if __name__ == "__main__":
     parser.add_argument("output_file", help="Path to the output file in tabular format (can end with '.gz' for gzipped output)")
     parser.add_argument("summary_file", help="Path to the summary file for gene counts (sorted by counts)")
     parser.add_argument("--genetic_code", type=int, default=1, help="Genetic code table number for translation (default: 1). For details on available code tables, visit https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi")
+    parser.add_argument("--gene_alias", type=str, default="", help="Gene name aliases file")
     parser.add_argument("--no_rRNA", action="store_true", help="Exclude rRNA genes")
     parser.add_argument("--no_tRNA", action="store_true", help="Exclude tRNA genes")
+    parser.add_argument("--include_ORF", action="store_true", help="Include open reading frames")
     parser.add_argument("--check_codon", action="store_true", help="Check codon consistency for tRNA genes")
     parser.add_argument("--translate", action="store_true", help="Write translation sequences for CDS")
 
     args = parser.parse_args()
-    main(args.input_genbank_file, args.output_file, args.summary_file, args.genetic_code, args.no_rRNA, args.no_tRNA, args.check_codon, args.translate)
+    parse_genbank_file(args.input_genbank_file, args.output_file, args.summary_file, args.genetic_code, args.gene_alias, args.no_rRNA, args.no_tRNA, args.include_ORF, args.check_codon, args.translate)
 

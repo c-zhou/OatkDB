@@ -37,12 +37,15 @@ Here is the full list of the options, which can be shown with the command `oatkd
       -c|--codon    INT    NCBI genetic code table for translation (default 1).
       -T|--tmpdir   STR    Temp file directory (default auto).
       -f|--force           Overwrite existing files.
+      -a|--alias    STR    Gene name alias file.
       -o|--output   STR    Output HMM profile database file name prefix (default auto).
-         --max-src  INT    Maximum number of source reference sequences to use (default 0 [no limit]).
+         --max-ref  INT    Maximum number of NCBI reference sequences to download (default INF).
+         --max-src  INT    Maximum number of source gene sequences to use (default 100000).
          --min-seq  INT    Minimum number of sequences to keep a gene (default 5).
          --max-seq  INT    Maximum number of sequences to use for HMM (default 10000).
          --no-trna         Do not build HMM profiles for tRNA genes.
          --no-rrna         Do not build HMM profiles for rRNA genes.
+         --incl-orf        Include open reading frames.
          --resume          Resume a previously unfinished run.
          --clean           Clean temporary files when finished.
          --test            Run program in test mode.
@@ -79,6 +82,7 @@ Here is the full list of the options, which can be shown with the command `seqdb
       -T|--tmpdir   STR    Temp file directory (default auto).
       -f|--force           Overwrite existing files.
       -o|--output   STR    Output HMM profile database file (default auto).
+         --max-src  INT    Maximum number of source gene sequences to use (default 100000).
          --min-seq  INT    Minimum number of sequences to keep a gene (default 5).
          --max-seq  INT    Maximum number of sequences to use for HMM (default 10000).
          --resume          Resume a previously unfinished run.
@@ -99,7 +103,7 @@ Here is the full list of the options, which can be shown with the command `seqdb
 ```
 
 ## Mancdb
-This tool is used for the final manual curation of the database. Even though `oatkdb` endeavours to build a clean core gene set, some noises may still be left. `Mancdb` provides an interface to manually curate the core gene set to be included in the database and rebuild the database. It takes three positional parameters: a gene list file, the temporary folder (used to run `oatkdb`) and the output database file name. The `Oatkdb` temporary folder is required to run `mancdb`. The gene list file follows the same format as the intermediate file `tmp_Gene.list` which can be found in the `oatkdb` temporary folder. 
+This tool is used for the final manual curation of the database. Even though `oatkdb` endeavours to build a clean core gene set, some noises may still be left. `Mancdb` provides an interface to manually curate the core gene set to be included in the database and rebuild the database. It takes three positional parameters: a gene list file, the temporary folder (used to run `oatkdb`) and the output database file name. The `Oatkdb` temporary folder is required to run `mancdb`. The gene list file follows the same format as the intermediate file `Gene.list` which can be found in the `oatkdb` temporary folder. 
 
 Here is the full list of the options, which can be shown with the command `mancdb -h`.
 

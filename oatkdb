@@ -28,12 +28,15 @@ oatkdb_usage() {
     echo "      -c|--codon    INT    NCBI genetic code table for translation (default 1)."
     echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
     echo "      -f|--force           Overwrite existing files."
+    echo "      -a|--alias    STR    Gene name alias file."
     echo "      -o|--output   STR    Output HMM profile database file name prefix (default auto)."
-    echo "         --max-src  INT    Maximum number of source reference sequences to use (default 0 [no limit])."
+    echo "         --max-ref  INT    Maximum number of NCBI reference sequences to download (default 1000000)."
+    echo "         --max-src  INT    Maximum number of source gene sequences to use (default 100000)."
     echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
     echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
     echo "         --no-trna         Do not build HMM profiles for tRNA genes."
     echo "         --no-rrna         Do not build HMM profiles for rRNA genes."
+    echo "         --incl-orf        Include open reading frames."
     echo "         --resume          Resume a previously unfinished run."
     echo "         --clean           Clean temporary files when finished."
     echo "         --test            Run program in test mode."
@@ -142,13 +145,16 @@ THREADS=8
 USEAA=0
 CODON=1
 TEMPDIR=""
-MAXSRC=999999999
+MAXREF=1000000
+MAXSRC=100000
 MINSEQ=5
 MAXSEQ=10000
 NOTRNA=0
 NORRNA=0
+INCLORF=0
 RESUME=0
 FORCE=0
+ALIAS=""
 CLEAN=0
 TEST=0
 LOGFILE="/dev/stdout"
@@ -165,12 +171,15 @@ do
         -c|--codon   ) CODON=${2};   shift; shift;;
         -T|--tmpdir  ) TEMPDIR=${2}; shift; shift;;
         -f|--force   ) FORCE=1;      shift;;
+        -a|--alias   ) ALIAS=$2;     shift; shift;;
         -o|--output  ) OUTPUT=${2};  shift; shift;;
+        --max-ref    ) MAXREF=${2};  shift; shift;;
         --max-src    ) MAXSRC=${2};  shift; shift;;
         --min-seq    ) MINSEQ=${2};  shift; shift;;
         --max-seq    ) MAXSEQ=${2};  shift; shift;;
         --no-trna    ) NOTRNA=1;     shift;;
         --no-rrna    ) NORRNA=1;     shift;;
+        --incl-orf   ) INCLORF=1;    shift;;
         --resume     ) RESUME=1;     shift;;
         --clean      ) CLEAN=1;      shift;;
         --test       ) TEST=1;       shift;;
@@ -242,8 +251,19 @@ then
     fi
 fi
 
+if [[ -z ${ALIAS} ]]
+then
+    ALIAS="${PTH}/alias.txt"
+fi
+
+if [ ! -f ${ALIAS} ]
+then
+    >&2 echo "WARN: Unable to find ${ALIAS}"
+    ALIAS=""
+fi
+
 ## run program in test mode
-if [[ ${TEST} -eq 1 ]]; then MAXSRC=10; MINSEQ=2; MAXSEQ=10; fi
+if [[ ${TEST} -eq 1 ]]; then MAXREF=10; MAXSRC=10; MINSEQ=2; MAXSEQ=10; fi
 
 if [[ ! -d ${TEMPDIR} ]]
 then
@@ -271,11 +291,11 @@ STAGE=0
 #*************** MODULE I. DOWNLOAD SOURCE SEQUENCES ***************
 #*******************************************************************
 STAGE=$((STAGE+1))
-rawMetaFile="${TEMPDIR}/tmp_rawGBFile.meta"
-rawGBFile="${TEMPDIR}/tmp_rawGBFile.gb"
-efetchJobList="${TEMPDIR}/tmp_efetchJobs"
-efetchJobFailed="${TEMPDIR}/tmp_efetchJobs.failed"
-efetchJobFailed2="${TEMPDIR}/tmp_efetchJobs.failed.2"
+rawMetaFile="${TEMPDIR}/rawGBFile.meta"
+rawGBFile="${TEMPDIR}/rawGBFile.gb"
+efetchJobList="${TEMPDIR}/efetchJobs.list"
+efetchJobFailed="${TEMPDIR}/efetchJobs.failed"
+efetchJobFailed2="${TEMPDIR}/efetchJobs.failed.2"
 checkpoint="${TEMPDIR}/1.done"
 
 TEMPFILES+=(${rawMetaFile})
@@ -286,10 +306,13 @@ TEMPFILES+=(${efetchJobFailed2})
 TEMPFILES+=(${checkpoint})
 
 efetch_post () {
+    format=$1;  shift
     infile=$1;  shift
     outfile=$1; shift
     errfile=$1; shift
     errmsg=$1;  shift
+    # no need to check file integrity if not GenBank file
+    if [[ ${format} != "gb" ]]; then cat ${infile} >>${outfile}; rm ${infile}; exit 0; fi
     # a naive way to check if it is a valid GenBank file
     while IFS= read -r header; do if [[ -n ${header} ]]; then break; fi; done < ${infile}
     while IFS= read -r tailer; do if [[ -n ${tailer} ]]; then break; fi; done < <(tac ${infile})
@@ -305,6 +328,50 @@ efetch_post () {
 
 export -f efetch_post
 
+efetch_chunked () {
+    metaFile=$1; shift
+    mmRef=$1;    shift
+    format=$1;   shift
+    output=$1;   shift
+    
+    rm -f ${efetchJobList} ${efetchJobFailed} ${efetchJobFailed2}
+
+    nSRC=$(cat ${metaFile} | wc -l)
+    if [[ ${nSRC} -gt ${mmRef} ]]; then nSRC=${mmRef}; fi
+    nBAT=1000
+    for i in $(seq 1 ${nBAT} ${nSRC})
+    do
+        nID=${nBAT}
+        if [[ $((i+nID)) -gt ${nSRC} ]]; then nID=$((nSRC-i+1)); fi
+        IDList=$(tail -n +${i} ${metaFile} | head -${nID} | awk '{print $1}' | paste -sd ',')
+        echo ${IDList}
+    done >${efetchJobList}
+    nJOB=$(cat ${efetchJobList} | wc -l)
+    touch ${efetchJobFailed}
+    info_message "    Downloading [${nSRC}] ${format} files..."
+    info_message "      Running ${NCORE} parallel jobs."
+    info_message "      Using 1 core per job."
+    info_message "      [${nJOB}] jobs to run."
+    parallel -j${NCORE} --delay 1 -a ${efetchJobList} \
+        "efetch -db nuccore -format ${format} -chunk ${nBAT} -id {} >${output}.T{%}.tmp;
+            efetch_post ${format} ${output}.T{%}.tmp ${output}.T{%} ${efetchJobFailed} {}"
+    nJOB=$(cat ${efetchJobFailed} | wc -l)
+    if [[ ${nJOB} -gt 0 ]]
+    then
+        touch ${efetchJobFailed2}
+        info_message "      Second try for ${nJOB} failed jobs."
+        info_message "      [${nJOB}] jobs to run."
+        parallel -j${NCORE} --delay 1 -a ${efetchJobFailed} \
+            "efetch -db nuccore -format ${format} -chunk ${nBAT} -id {} >${output}.T{%}.tmp;
+                efetch_post ${format} ${output}.T{%}.tmp ${output}.T{%} ${efetchJobFailed2} {}"
+        nFAIL=$(cat ${efetchJobFailed2} | wc -l)
+        info_message "      Second try DONE."
+        info_message "      ${nFAIL} jobs failed again."
+    fi
+    info_message "    Downloading [${nSRC}] ${format} files DONE."
+    cat ${output}.T* >${output} && rm ${output}.T*
+}
+
 info_message "Stage ${STAGE}: download source sequences"
 if [[ ! -f ${checkpoint} ]] || [[ ! -f ${rawGBFile} ]]
 then
@@ -313,43 +380,33 @@ then
     info_message "  Start downloading source sequences."
     info_message "    Downloading metafile..."
     query_str="txid${TAXID} [Organism] AND ${ORGANELLE} [Filter]"
+    # only need accession id
     esearch -db nuccore -query "${query_str}" | \
-        efetch -format acc >${rawMetaFile}
+        efetch -format acc -chunk 10000 >${rawMetaFile}
     info_message "    Downloading metafile DONE."
     nSRC=$(cat ${rawMetaFile} | wc -l)
-    if [[ ${nSRC} -gt ${MAXSRC} ]]; then nSRC=${MAXSRC}; fi
-    nBAT=1000
-    for i in $(seq 1 ${nBAT} ${nSRC})
-    do
-        nID=${nBAT}
-        if [[ $((i+nID)) -gt ${nSRC} ]]; then nID=$((nSRC-i+1)); fi
-        IDList=$(tail -n +${i} ${rawMetaFile} | head -${nID} | paste -sd ',')
-        echo ${IDList}
-    done >${efetchJobList}
-    nJOB=$(cat ${efetchJobList} | wc -l)
-    touch ${efetchJobFailed}
-    info_message "    Downloading [${nSRC}] reference files..."
-    info_message "      Running ${NCORE} parallel jobs."
-    info_message "      Using 1 core per job."
-    info_message "      [${nJOB}] jobs to run."
-    parallel -j${NCORE} --delay 1 -a ${efetchJobList} \
-        "efetch -db nuccore -format gb -chunk ${nBAT} -id {} >${rawGBFile}.T{%}.tmp; 
-        efetch_post ${rawGBFile}.T{%}.tmp ${rawGBFile}.T{%} ${efetchJobFailed} {}"
-    nJOB=$(cat ${efetchJobFailed} | wc -l)
-    if [[ ${nJOB} -gt 0 ]]
+    if [[ ${MAXREF} -lt $((nSRC/2)) ]]
     then
-        touch ${efetchJobFailed2}
-        info_message "      Second try for ${nJOB} failed jobs."
-        info_message "      [${nJOB}] jobs to run."
-        parallel -j${NCORE} --delay 1 -a ${efetchJobFailed} \
-            "efetch -db nuccore -format gb -chunk ${nBAT} -id {} >${rawGBFile}.T{%}.tmp; 
-            efetch_post ${rawGBFile}.T{%}.tmp ${rawGBFile}.T{%} ${efetchJobFailed2} {}"
-        nFAIL=$(cat ${efetchJobFailed2} | wc -l)
-        info_message "      Second try DONE."
-        info_message "      ${nFAIL} jobs failed again."
+        # when source file is far more than required
+        # download feature table and sort sequences by gene count
+        # the first MAXREF sequences with more genes will be downloaded
+        efetch_chunked ${rawMetaFile} ${nSRC} "ft" "${rawMetaFile}.ft"
+        # parse feature table to count genes on each sequence
+        cat ${rawMetaFile}.ft | \
+            awk -v FS="\t" '{
+                    if($0~/^>Feature/) {
+                        match($0, /\|([^|]+)\|/, arr);
+                        acc=arr[1];
+                    } else if (acc && $3=="gene") {
+                        count[acc]++;
+                    }
+            } END { for(acc in count) print acc"\t"count[acc] }' | sort -k2n,2r >${rawMetaFile}
+        rm -f ${rawMetaFile}.ft
+        # set nSRC to MAXREF
+        nSRC=${MAXREF}
     fi
-    info_message "    Downloading [${nSRC}] reference files DONE."
-    cat ${rawGBFile}.T* >${rawGBFile} && rm ${rawGBFile}.T*
+    # now download source sequences
+    efetch_chunked ${rawMetaFile} ${nSRC} "gb" ${rawGBFile}
     info_message "  Downloading source sequences DONE."
     touch ${checkpoint}
 else
@@ -361,8 +418,8 @@ info_message "Stage ${STAGE} DONE."
 #****************** MODULE II. PARSE GENBANK FILES *****************
 #*******************************************************************
 STAGE=$((STAGE+1))
-parsedGBFile="${TEMPDIR}/tmp_GBFile.parsed"
-summaryFile="${TEMPDIR}/tmp_GBFile.summary"
+parsedGBFile="${TEMPDIR}/GBFile.parsed"
+summaryFile="${TEMPDIR}/GBFile.summary"
 checkpoint="${TEMPDIR}/2.done"
 
 TEMPFILES+=(${parsedGBFile})
@@ -375,10 +432,12 @@ then
     clean_checkpoint ${STAGE}
     info_message "  Start parsing GenBank files."
     CMD="${gbparse} ${rawGBFile} ${parsedGBFile} ${summaryFile} --genetic_code ${CODON}"
+    if [[ ! -z ${ALIAS} ]]; then CMD=${CMD}" --gene_alias ${ALIAS}"; fi
     if [[ ${USEAA} -eq 1 ]]; then CMD=${CMD}" --translate"; fi
     if [[ ${NOTRNA} -eq 1 ]]; then CMD=${CMD}" --no_tRNA"; fi
     if [[ ${NORRNA} -eq 1 ]]; then CMD=${CMD}" --no_rRNA"; fi
-    info_message "    Running CMD: ${CMD}"
+    if [[ ${INCLORF} -eq 1 ]]; then CMD=${CMD}" --include_ORF"; fi
+    # info_message "    Running CMD: ${CMD}"
     eval ${CMD}
     info_message "  Parsing GenBank files DONE."
     touch ${checkpoint}
@@ -391,8 +450,8 @@ info_message "Stage ${STAGE} DONE."
 #***************** MODULE III. PARSE GENE SEQUENCES ****************
 #*******************************************************************
 STAGE=$((STAGE+1))
-geneListFile="${TEMPDIR}/tmp_Gene.list"
-geneSeqDir="${TEMPDIR}/tmp_GeneSeqs"
+geneListFile="${TEMPDIR}/Gene.list"
+geneSeqDir="${TEMPDIR}/GeneSeqs"
 checkpoint="${TEMPDIR}/3.done"
 
 TEMPFILES+=(${geneListFile})
@@ -464,6 +523,7 @@ sequence_clean () {
     gName=$1; shift
     sDir=$1;  shift
     aaSeq=$1; shift
+    mmSrc=$1; shift
     mnSeq=$1; shift
     mmSeq=$1; shift
     nProc=$1; shift
@@ -472,11 +532,12 @@ sequence_clean () {
     # get the average sequence length
     len=$(seqtk seq -l0 $fna | awk 'BEGIN{B=0; N=0}{if(NR%2==0) {B+=length($1); N++}}END{if(N==0) N=1; print int(B/N)}')
     # clean sequence: remove sequences containing invalid symbols, remove identical sequences from the same species, remove sequences too long or too short
+    mmLine=$((mmSrc*2))
     if [[ ${aaSeq} -eq 1 ]]
     then
-        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mmLine} >${pfx}.clean.fna
     else
-        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mmLine} >${pfx}.clean.fna
     fi
     nseq=$(cat ${pfx}.clean.fna | grep "^>" | wc -l)
     # need enough sequences to proceed
@@ -511,7 +572,7 @@ then
         wait_until
         read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
         if [[ $((i%J)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gName}."; fi
-        sequence_clean ${gType} ${gName} ${geneSeqDir} ${USEAA} ${MINSEQ} ${MAXSEQ} ${THREADS} &
+        sequence_clean ${gType} ${gName} ${geneSeqDir} ${USEAA} ${MAXSRC} ${MINSEQ} ${MAXSEQ} ${THREADS} &
     done
     wait
     info_message "  Cleaning and aligning gene sequences DONE."
@@ -525,7 +586,7 @@ info_message "Stage ${STAGE} DONE."
 #**************** MODULE V. PROFILE HMM CONSTRUCTION ***************
 #*******************************************************************
 STAGE=$((STAGE+1))
-hmmDBName="${TEMPDIR}/tmp_DB.fam"
+hmmDBName="${TEMPDIR}/DB.fam"
 checkpoint="${TEMPDIR}/5.done"
 
 TEMPFILES+=(${hmmDBName})
@@ -544,7 +605,7 @@ hmm_build () {
     # as described https://academic.oup.com/bioinformatics/article/31/11/1836/2365396
     if [[ ${gType} == "CDS" ]] && [[ ${aaSeq} -eq 1 ]]
     then
-        ${aa2nucl} --codon_table_id ${CODON} ${mas} ${pfx}.clean.2.nucl.maf
+        ${aa2nucl} --codon_table_id ${CODON} ${msa} ${pfx}.clean.2.nucl.maf
         msa="${pfx}.clean.2.nucl.maf"
         TEMPFILES+=(${msa})
     fi
