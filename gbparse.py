@@ -11,16 +11,16 @@ from Bio.Seq import Seq
 
 def find_anticodon(feature):
     anticodon = feature.qualifiers.get("anticodon", [""])[0]
-    if anticodon and re.match(r'^[ACGU]{3}$', anticodon):
-        return anticodon
+    if anticodon and re.match(r'^[ACGUacgu]{3}$', anticodon):
+        return anticodon.upper()
     else:
         # try to find anticodon in /note
         note = feature.qualifiers.get("note", [""])[0]
         if note:
-            match = re.match(r'.*anticodon:([ACGU]{3}).*', note)
+            match = re.match(r'.*anticodon:([ACGUacgu]{3}).*', note)
             if match:
                 # anticodon found
-                return match.group(1)
+                return match.group(1).upper()
     return ""
 
 # A custom function to check if a character is valid for a gene name
@@ -32,7 +32,7 @@ def is_valid_char(char):
 def location_string(location):
     return f"{location.nofuzzy_start}-{location.nofuzzy_end}"
 
-def extract_genes(record, genetic_code, include_tRNA, include_rRNA, check_codon, cds_translation):
+def extract_genes(record, genetic_code, include_tRNA, include_rRNA, include_ORF, check_codon, cds_translation):
     genes = []
 
     # update genetic code if translation table is recorded
@@ -54,62 +54,70 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, check_codon,
                 sequence = ""
 
             if feature.type == "tRNA":
-                if not re.match(r'^trn[a-z]{0,1}[ACDEFGHIKLMNPQRSTVWY]{1}-[ACGU]{3}$', gene):
-                    # to rescue tRNA genes with informal names
-                    if re.match(r'^trn[a-z]{0,1}[ACDEFGHIKLMNPQRSTVWY]{1}\([ACGU]{3}\)$', gene):
-                        # change trn*(*) to trn*-*
-                        gene = re.sub(r'\((.*?)\)', r'-\1', gene)
-                    if re.match(r'^trn[a-z]{0,1}[ACDEFGHIKLMNPQRSTVWY]{1}_[ACGU]{3}$', gene):
-                        # change trn*_* to trn*-*
-                        gene = gene.replace("_", "-")
-                    if re.match(r'^trn[a-z]{0,1}[ACDEFGHIKLMNPQRSTVWY]{1}$', gene):
-                        # missing anticodon
-                        anticodon = find_anticodon(feature)
-                        if anticodon:
-                            gene = gene + "-" + anticodon;
+                matched = False
+                aminoacid = None
+                anticodon = None
 
-                match = re.match(r'^trn[a-z]{0,1}([ACDEFGHIKLMNPQRSTVWY]{1})-([ACGU]{3})$', gene)
-                if not match:
+                # match trnM-GGG trnM_GGG trnM(GGG) TrNM[GGG] trnM trnfM etc
+                match =  re.match(r'^([t|T][r|R][n|N])([a-z]{0,1})([ACDEFGHIKLMNPQRSTVWYacdefghiklmnpqrstvwy]{1})[-|_]?[\(|\]]?([ACGUacgu]{3})?[\)|\]]?$', gene)
+                if match:
+                    aminoacid = match.group(3).upper()
+                    anticodon = match.group(4)
+                    # to rescue tRNA genes without anticodon
+                    if not anticodon:
+                        anticodon = find_anticodon(feature)
+                    else:
+                        anticodon = anticodon.upper()
+                    if anticodon:
+                        matched = True
+                        gene = f"{match.group(1).lower()}{match.group(2)}{aminoacid}-{anticodon}"
+
+                if not matched:
                     # gene name cannot be formatted
                     gene = ""
                 elif check_codon:
                     # check if in the codon table
-                    aa = match.group(1)
-                    anticodon = match.group(2)
-                    if codon_table.get(str(Seq(anticodon).reverse_complement())) != aa:
+                    if codon_table.get(str(Seq(anticodon).reverse_complement())) != aminoacid:
                         # anticodon and AA do not match
                         gene = ""
 
             if feature.type == "rRNA":
                 # fine to change names to lowercase for rRNA genes
                 gene = gene.lower()
-                if gene.endswith("s") or gene.endswith("l"):
-                    # change rrn[4.5|5|16|23][s|S] and rrn[4.5|5|16|23][l|L] to rrn[4.5|5|16|23]
-                    # for small subunit and large subunit
-                    gene = gene[:-1]
-                match = re.match(r'^(\d+(\.\d+)?)rrn$', gene)
-                if match:
-                    # change [4.5|5|16|23]rrn to rrn[4.5|5|16|23]
-                    gene = "rrn" + match.group(1)
-                if re.match(r'^\d+(\.\d+)?$', gene):
-                    # change [4.5|5|16|23] to rrn[4.5|5|16|23]
-                    gene = "rrn" + gene
-                if not re.match(r'^rrn\d+(\.\d+)?$', gene):
+                # match [4.5|5|16|23][s?]rrn
+                match = re.match(r'^(\d+(\.\d+)?)s?rrn$', gene)
+                if not match:
+                    # match [4.5|5|16|23][s?]
+                    match = re.match(r'^(\d+(\.\d+)?)s?$', gene)
+                if not match:
+                    # match rrn[4.5|5|16|23][s?]
+                    match = re.match(r'^rrn(\d+(\.\d+)?)s?$', gene)
+                if not match:
                     # gene name cannot be formatted
+                    # to rescue rRNA genes with product information
+                    product = feature.qualifiers.get("product", [""])[0]
+                    if product:
+                        product = product.lower()
+                        match = re.search(r'(\d+(\.\d+)?)s?[\s\t]*ribosom(al|e)[\s\t]*rna', product)
+                if match:
+                    gene = f"rrn{match.group(1)}"
+
+            if feature.type == "CDS":
+                if not include_ORF and re.match(r'^[O|o][R|r][F|f].*', gene):
                     gene = ""
 
-            if feature.type == "CDS" and cds_translation:
-                translation = feature.qualifiers.get("translation", [""])[0]
+                if gene and cds_translation:
+                    translation = feature.qualifiers.get("translation", [""])[0]
                 
-                # If translation is not available, calculate it using the specified genetic code
-                if not translation:
-                    seq_obj = Seq(sequence)
-                    try:
-                        translation = str(seq_obj.translate(table=genetic_code, cds=True))
-                    except CodonTable.TranslationError:
-                        translation = ""
+                    # If translation is not available, calculate it using the specified genetic code
+                    if not translation:
+                        seq_obj = Seq(sequence)
+                        try:
+                            translation = str(seq_obj.translate(table=genetic_code, cds=True))
+                        except CodonTable.TranslationError:
+                            translation = ""
 
-                sequence = translation
+                    sequence = translation
             
             if gene and all(is_valid_char(char) for char in gene) and sequence:
                 genes.append([feature.type, gene, record.id, location_string(feature.location), sequence])
@@ -118,10 +126,9 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, check_codon,
 
 def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_code, gene_alias, no_rRNA, no_tRNA, include_ORF, check_codon, translate):
     gene_list = []
-    gene_counts = defaultdict(int)
     '''
     for record in SeqIO.parse(input_genbank_file, "genbank"):
-        genes = extract_genes(record, genetic_code, not no_tRNA, not no_rRNA, check_codon, translate)
+        genes = extract_genes(record, genetic_code, not no_tRNA, not no_rRNA, include_ORF, check_codon, translate)
         gene_list.extend(genes)
     '''
     # this is to replace the naive SeqIO parse to deal with GenBank file parsing errors
@@ -137,13 +144,13 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
                     string_io = StringIO("\n".join(gb_file_buff))
                     try:
                         record = SeqIO.read(string_io, "genbank")
-                        genes = extract_genes(record, genetic_code, not no_tRNA, not no_rRNA, check_codon, translate)
+                        genes = extract_genes(record, genetic_code, not no_tRNA, not no_rRNA, include_ORF, check_codon, translate)
                         gene_list.extend(genes)
                     except Exception as e:
                         print(f"Error parsing record: {gb_file_buff[0]}")
                     string_io.close()
                     gb_file_buff.clear()
-
+    
     # find the most common name for each case-insensitive gene name
     name_counts = {}
     for _, gene_name, _, _, _ in gene_list:
@@ -162,19 +169,26 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
 
     # Sort the genes by gene type and then by gene name
     sorted_genes = sorted(gene_list, key=lambda x: (x[0], x[1], x[2]))
+    
+    # Update sequence gene counts
+    seq_gene_counts = defaultdict(int)
+    # Count genes by sequence
+    for _, _, sequence_id, _, _ in sorted_genes:
+        seq_gene_counts[sequence_id] += 1
 
     # Check if the output file name ends with ".gz" and write a gzipped file if it does
     if output_file.endswith(".gz"):
         with gzip.open(output_file, "wt") as output:
-            output.write("#Type\tGene\tSequence\tLocation\tSequence\n")
+            output.write("#Type\tGene\tAccession\tCount\tLocation\tSequence\n")
             for gene_type, gene_name, sequence_id, location, sequence in sorted_genes:
-                output.write(f"{gene_type}\t{gene_name}\t{sequence_id}\t{location}\t{sequence}\n")
+                output.write(f"{gene_type}\t{gene_name}\t{sequence_id}\t{seq_gene_counts[sequence_id]}\t{location}\t{sequence}\n")
     else:
         with open(output_file, "w") as output:
-            output.write("#Type\tGene\tSequence\tLocation\tSequence\tTranslation\n")
+            output.write("#Type\tGene\tAccession\tCount\tLocation\tSequence\n")
             for gene_type, gene_name, sequence_id, location, sequence in sorted_genes:
-                output.write(f"{gene_type}\t{gene_name}\t{sequence_id}\t{location}\t{sequence}\n")
+                output.write(f"{gene_type}\t{gene_name}\t{sequence_id}\t{seq_gene_counts[sequence_id]}\t{location}\t{sequence}\n")
 
+    gene_counts = defaultdict(int)
     # Count genes by type and name for the summary file
     for gene_type, gene_name, _, _, _ in sorted_genes:
         gene_counts[f"{gene_type}_{gene_name}"] += 1

@@ -466,11 +466,24 @@ extract_seqs () {
     sDir=${1};  shift
     sList=${1}; shift
     info_message "    Processing ${tGene} genes"
-    # find sequence count threshold mSeq=MAX(MINSEQ, N80/5)
-    tSeq=$(cat ${sFile} | grep "^${tGene}" | awk '{n+=$3}END{print n}')
+    # find sequence count threshold mSeq=MAX(MINSEQ, N50(N50)*0.2, N99)
+    tSeq=$(cat ${sFile} | grep "^${tGene}" | awk '{if ($3>=3) n+=$3}END{print n}')
     mSeq=$(cat ${sFile} | grep "^${tGene}" | sort -k3n,3r | \
-        awk -v M=${mSeq} -v N=${tSeq} \
-        'BEGIN{n=0; s=0; N*=0.8}{if(n<N) s=$3; n+=$3}END{s=int(s*0.2); if(s<M) s=M; print s}')
+        awk -v M=${mSeq} -v N=${tSeq} 'BEGIN {n=0; m=0; s=0; t=0; R=N;}
+        {
+            if (n < N*0.8) {
+                R-=$3;
+            } else if (m < R*0.8) {
+                s=$3;  m+=$3;
+            }
+            if (n < N*0.99) t=$3;
+            n+=$3;
+        } END {
+            s=int(s*0.2);
+            if(s<t) s=t;
+            if(s<M) s=M;
+            print s;
+        }')
     cat ${sFile} | grep "^${tGene}" | awk -v M=${mSeq} '{if($3>=M) print $0}' >> ${sList}
     nSeq=$(cat ${sList} | grep "^${tGene}" | wc -l)
     info_message "      gene sequence count threshold ${mSeq}."
@@ -480,7 +493,7 @@ extract_seqs () {
     mkdir -p ${sDir}
     rm -f ${sDir}/*
     awk -v T=${tGene} -v D=${sDir} \
-        'NR==FNR{if($1==T) t[$2]=1; next} {if($1==T&&t[$2]) print ">"$2"_"$3"_"$4" "$3"\n"$5 >D"/"$2".fna"}' \
+        'NR==FNR{if($1==T) t[$2]=1; next} {if($1==T&&t[$2]) print ">"$2"_"$3"_"$5" "$3"\n"$6 >D"/"$2".fna"}' \
         ${sList} ${gFile}
     info_message "    Processing ${tGene} genes DONE."
 }
