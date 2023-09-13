@@ -2,12 +2,61 @@
 
 import argparse
 import gzip
+import sys
 import re
 from collections import defaultdict
 from io import StringIO
 from Bio import SeqIO
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
+
+class Alias:
+    # alias gene name conversion
+
+    def __init__(self, target_string, regex_pattern):
+        self.target_string = target_string
+        self.regex_pattern = re.compile(regex_pattern)
+        self.check_compatibility()
+
+    def check_compatibility(self):
+        max_group_index = max((int(match) for match in re.findall(r'\((\d+)\)', self.target_string)), default = 0);
+        if max_group_index > self.regex_pattern.groups:
+            print(f"Error: undefined caputre group in target string: '{self.target_string}'")
+            print(f"       regex pattern: '{self.regex_pattern.pattern}'")
+            sys.exit(1)
+
+    def alias_string_format(self, input_string):
+        # Use re.search() to find the pattern within the target_string
+        '''
+        Examples:
+        input_string    target_string   regex_pattern (pre-compiled)        output_string
+        COI             COX1            ^[Cc][Oo][Xx]?(1|I)$                COX1
+        COX2            COX2            ^[Cc][Oo][Xx]?(2|II)$               COX2
+        cox3            COX3            ^[Cc][Oo][Xx]?(3|III)$              COX3
+        Cyt-b           cytb            ^[Cc][Yy][Tt]?o?-?[B|b]$            cytb
+        ndh4L           ND4L            ^[Nn][Aa]?[Dd][Hh]?4[Ll]$           ND4L
+        ND5             ND(1)           ^[Nn][Aa]?[Dd][Hh]?(\d{1})$         ND5
+        ndhB            ndh(1)          ^[Nn][Aa]?[Dd][Hh]?([a-zA-Z]{1})$   ndhB
+
+        Example usage:
+        alias_pattern = Alias("cytb", "^[Cc][Yy][Tt]?o?-?[B|b]$")
+        result = alias_pattern.alias_string_format("Cytb")
+        '''
+        # Use re.search() to find the pattern within the input_string
+        match = self.regex_pattern.match(input_string)
+
+        if match:
+            # Extract all matched groups
+            matched_groups = match.groups()
+            target_string = str(self.target_string)
+            # Replace "(1)", "(2)", etc., in the target_string with the matched groups
+            for i, group in enumerate(matched_groups, 1):
+                target_string = target_string.replace(f'({i})', group)
+
+            return True, target_string
+        else:
+            # Return the original input_string if no match is found
+            return False, input_string
 
 def find_anticodon(feature):
     anticodon = feature.qualifiers.get("anticodon", [""])[0]
@@ -124,6 +173,28 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, include_ORF,
     
     return genes
 
+def parse_alias_file(input_alias_file):
+    aliases = []
+    with open(input_alias_file, "r") as alias_file:
+        for line in alias_file:
+            line = line.strip()
+
+            # Skip empty lines and lines that start with "#"
+            if not line or line.startswith("#"):
+                continue
+
+            columns = re.split(r'\s+', line.strip())
+            # Ensure there are at least two columns before extracting
+            if len(columns) < 2:
+                print(f"Error: not a valild alias rule: '{self.target_string}'")
+                print(f"       at lease two columns required")
+                sys.exit(1)
+            
+            # Append the new Alias to the data list
+            aliases.append(Alias(columns[0], columns[1]))
+    
+    return aliases
+
 def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_code, gene_alias, no_rRNA, no_tRNA, include_ORF, check_codon, translate):
     gene_list = []
     '''
@@ -151,10 +222,23 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
                     string_io.close()
                     gb_file_buff.clear()
     
-    # find the most common name for each case-insensitive gene name
+    # read gene name aliases
+    aliases = parse_alias_file(gene_alias)
+    
+    # convert gene name to aliases
+    name_aliases = defaultdict(str)
+    gene_set = set(map(lambda item: item[1], gene_list))
+    for gene in gene_set:
+        for alias in aliases:
+            matched, name_alias = alias.alias_string_format(gene)
+            if matched:
+                break
+        name_aliases[gene] = name_alias
+
+    # find the most common name for each case-insensitive gene alias name
     name_counts = {}
     for _, gene_name, _, _, _ in gene_list:
-        name_lower = gene_name.lower()
+        name_lower = name_aliases[gene_name].lower()
         if name_lower not in name_counts:
             name_counts[name_lower] = defaultdict(int)
         name_counts[name_lower][gene_name] += 1
@@ -165,7 +249,7 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
     
     # change gene name to the most commonly used one
     for gene in gene_list:
-        gene[1] = name_dict[gene[1].lower()]
+        gene[1] = name_dict[name_aliases[gene[1]].lower()]
 
     # Sort the genes by gene type and then by gene name
     sorted_genes = sorted(gene_list, key=lambda x: (x[0], x[1], x[2]))
@@ -215,7 +299,7 @@ if __name__ == "__main__":
     parser.add_argument("--include_ORF", action="store_true", help="Include open reading frames")
     parser.add_argument("--check_codon", action="store_true", help="Check codon consistency for tRNA genes")
     parser.add_argument("--translate", action="store_true", help="Write translation sequences for CDS")
-
+    
     args = parser.parse_args()
     parse_genbank_file(args.input_genbank_file, args.output_file, args.summary_file, args.genetic_code, args.gene_alias, args.no_rRNA, args.no_tRNA, args.include_ORF, args.check_codon, args.translate)
 

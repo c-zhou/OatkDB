@@ -121,3 +121,28 @@ Here is the full list of the options, which can be shown with the command `mancd
   Example: mancdb gene_list tmpdir angiosperms_pltd_v20230911
 ```
 
+## About Gene Names
+
+### tRNA gene
+The names of tRNA genes follow the form `trn([A-Z])-([ACGU]{3})`, where the single letter captured by the first matching group is the amino acid code and the three-letter block captured by the second matching group is the anticodon. The program tries to rescue a tRNA gene name violating this naming scheme as long as the name can be matched by the regex `^([t|T][r|R][n|N])([a-z]{0,1})([ACDEFGHIKLMNPQRSTVWYacdefghiklmnpqrstvwy]{1})[-|_]?[\(|\]]?([ACGUacgu]{3})?[\)|\]]?$`. If the anticodon matching group is missed, the program will try to retrieve it from the `/note` feature in the Genbank record.
+
+### rRNA gene
+The names of rRNA genes follow the form `rrn(\d+(\.\d+)?)`, where the decimal number captured by the first matching group is the product ribosomal subunit. For example, `rrn4.5` and `rrn23` for 4.5S and 23S subunits respectively. If an rRNA gene name violates this naming scheme, the program will try to rescue it by checking the `/product` feature in the Genbank record to retrieve the product subunit. For example, the `MT-RNR1` and `MT-RNR2` genes in the mammal mitochondria genome will be renamed to `rrn12` and `rrn16`, respectively. If you want to change the name back, you can directly edit the HMM profile database. 
+
+### Gene name aliases
+A gene could have many names due to different naming conventions used by different annotation tools. For example, the prefix of NADH dehydrogenase genes could be `ND`, `NAD`, `NADH`, `NDH`, etc. OatkDB uses an alias file to capture these different naming schemes for identical genes. An alias file is a two-column (the extra columns will be ignored) text file with each line representing a formatting rule. The first column is the standard name, and the second column is a regex used to capture the matched name aliases.
+
+Here are some examples,
+
+*Example 1.* `COX2  ^[Cc][Oo][Xx]?(2|II)$`
+
+In this example, following this rule, `CO2`, `COII`, `COX2`, `COXII`, `coxII`, etc., will all be captured and converted to `COX2`. 
+
+*Example 2.* `ND(1)  ^[Nn][Aa]?[Dd][Hh]?(\d{1})$`
+
+In this example, a (NADH dehydrogenase) gene name with case insensitive prefixes `ND`, `NAD`, `NADH`, and `NDH` followed by a single digit will be captured and converted to the standard name `ND` followed by the single digit. The `(1)` part in `ND(1)` will be replaced by the first matching group in the formatting regex, i.e., the single digit. There could be more than one matching group, e.g., with the standard name `ND(3)-(1)`, the formatting step will replace `(3)` with the third matching group and `(1)` with the first matching group. In this case, the matching regex (i.e., the second column) must contain at least three matching groups. The program will do this compatibility check and will invoke an error if the check fails.
+
+By default, the `alias.txt` file in this repo will be used by the `oatkdb` script for name alias formatting. The script also accepts a user-defined alias file with `-a|--alias` option. The alias-checking procedure processes the file line by line and stops after the first match, so the user should guarantee no overlaps between matching regexes.
+
+It is noteworthy that the standard names in the alias file are not necessarily the names finally used in the database. The formatting step is only to group together genes with different names. The most commonly used name will be the final choice. For example, in the above example 1, if we see `COX2` 100 times and `COII` 101 times, the name `COII` will be used instead of the standard name COX2 as specified in the rule, and will be counted 201 times.
+
