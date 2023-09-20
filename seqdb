@@ -2,7 +2,6 @@
 
 # make sure these tools are available in system path
 # seqtk https://github.com/lh3/seqtk
-# Rscript https://www.r-project.org/
 # Python https://www.python.org/
 # mafft https://mafft.cbrc.jp/alignment/software/
 # hmmbuild http://hmmer.org/
@@ -24,7 +23,6 @@ seqdb_usage() {
     echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
     echo "      -f|--force           Overwrite existing files."
     echo "      -o|--output   STR    Output HMM profile database file (default auto)."
-    echo "         --max-src  INT    Maximum number of source gene sequences to use (default 100000)."
     echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
     echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
     echo "         --resume          Resume a previously unfinished run."
@@ -100,7 +98,7 @@ case "${PTH}" in
     ;;
 esac
 
-seqclean="${PTH}/seqclean.R"
+seqclean="${PTH}/seqclean.py"
 if [ ! -f ${seqclean} ]
 then
   >&2 echo "ERROR: Unable to find ${seqclean}"
@@ -116,7 +114,6 @@ fi
 
 ## check availabilities of dependencies
 check_tool seqtk https://github.com/lh3/seqtk
-check_tool Rscript https://www.r-project.org/
 check_tool python https://www.python.org/
 check_tool mafft https://mafft.cbrc.jp/alignment/software/
 check_tool hmmbuild http://hmmer.org/
@@ -129,7 +126,6 @@ THREADS=8
 USEAA=0
 CODON=1
 TEMPDIR=""
-MAXSRC=100000
 MINSEQ=5
 MAXSEQ=10000
 RESUME=0
@@ -150,7 +146,6 @@ do
         -T|--tmpdir  ) TEMPDIR=${2}; shift; shift;;
         -f|--force   ) FORCE=1;      shift;;
         -o|--output  ) OUTPUT=${2};  shift; shift;;
-        --max-src    ) MAXSRC=${2};  shift; shift;;
         --min-seq    ) MINSEQ=${2};  shift; shift;;
         --max-seq    ) MAXSEQ=${2};  shift; shift;;
         --resume     ) RESUME=1;     shift;;
@@ -242,13 +237,11 @@ then
         # remove sequences containing invalid symbols
         # remove identical sequences from the same species
         # remove sequences too long or too short
-        # maximum MAXSRC sequences to keep
-        mLine=$((MAXSRC*2))
         if [[ ${USEAA} -eq 1 ]]
         then
-            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mLine} >${clean1}
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
         else
-            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mLine} >${clean1}
+            seqtk seq -U -l0 ${INPUT} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${clean1}
         fi
         nseq=$(cat ${clean1} | grep "^>" | wc -l)
         TEMPFILES+=(${clean1})
@@ -267,32 +260,7 @@ then
     fi
 fi
 
-## STEP II first round sequence alignment
-if [[ EXIT_STATUS -eq 0 ]]
-then
-    align1="${OUTPUTPFX}.clean.maf"
-
-    if [[ ${RESUME} -eq 0 ]]; then rm -f ${align1}; fi
-
-    if [[ ! -s ${align1} ]] || [[ ${REDO_FROM} -gt 0 ]]
-    then
-        info_message "Start first round sequence alignment."
-        # first round alignment
-        mafft --auto --quiet --thread ${THREADS} ${clean1} >${align1} || EXIT_STATUS=2
-        TEMPFILES+=(${align1})
-        info_message "First round sequence alignment DONE."
-        if [[ ${EXIT_STATUS} -eq 2 ]]
-        then
-            info_message "MAFFT alignemnt return ERROR code."
-            info_message "Exit."
-        fi
-        REDO_FROM=2
-    else
-        info_message "Skip first round sequence alignment. Previously DONE."
-    fi
-fi
-
-## STEP III second round sequence clean
+## STEP II second round sequence clean
 if [[ EXIT_STATUS -eq 0 ]]
 then
     clean2="${OUTPUTPFX}.clean.2.fna"
@@ -302,12 +270,15 @@ then
     if [[ ! -s ${clean2} ]]  || [[ ${REDO_FROM} -gt 0 ]]
     then
         info_message "Start second round sequence clean."
-        seqtk seq -l0 ${align1} >${align1}.tmpAln
         # sequence clean by divergence
-        ${seqclean} ${align1}.tmpAln ${MAXSEQ} >${align1}.tmpSeq 2>/dev/null
-        nseq=$(cat ${align1}.tmpSeq | wc -l)
-        seqtk subseq ${clean1}  ${align1}.tmpSeq >${clean2}
-        rm -f ${align1}.tmpAln ${align1}.tmpSeq
+        CMD="${seqclean} --rm_iqr_outlier --max_seq ${MAXSEQ}"
+        if [[ ${USEAA} -eq 1 ]]
+        then
+            CMD=${CMD}" --protein"
+        fi
+        CMD=${CMD}" ${clean1} ${clean2} 2>/dev/null"
+        eval ${CMD}
+        nseq=$(cat ${clean2} | grep "^>" | wc -l)
         TEMPFILES+=(${clean2})
         info_message "Second round sequence clean DONE."
         info_message "[${nseq}] sequences left after clean."
@@ -316,15 +287,15 @@ then
         then
             info_message "Not enough sequences to proceed"
             info_message "Exit."
-            EXIT_STATUS=3
+            EXIT_STATUS=2
         fi
-        REDO_FROM=3
+        REDO_FROM=2
     else
         info_message "Skip second round sequence clean. Previously DONE."
     fi
 fi
 
-## STEP IV second round sequence alignment
+## STEP III sequence alignment
 if [[ EXIT_STATUS -eq 0 ]]
 then
     align2="${OUTPUTPFX}.clean.2.maf"
@@ -333,24 +304,24 @@ then
 
     if [[ ! -s ${align2} ]] || [[ ${REDO_FROM} -gt 0 ]]
     then
-        info_message "Start second round sequence alignment."
+        info_message "Start sequence alignment."
         # second round alignment
         # will be used for HMM profile construction
-        mafft --auto --quiet --thread ${THREADS} ${clean2} >${align2} || EXIT_STATUS=4
+        mafft --auto --quiet --thread ${THREADS} ${clean2} >${align2} || EXIT_STATUS=3
         TEMPFILES+=(${align2})
-        info_message "Second round sequence alignment DONE."
-        if [[ ${EXIT_STATUS} -eq 4 ]]
+        info_message "Sequence alignment DONE."
+        if [[ ${EXIT_STATUS} -eq 3 ]]
         then
             info_message "MAFFT alignemnt return ERROR code."
             info_message "Exit."
         fi
-        REDO_FROM=4
+        REDO_FROM=3
     else
-        info_message "Skip second round sequence alignment. Previously DONE."
+        info_message "Skip sequence alignment. Previously DONE."
     fi
 fi
 
-## STEP V profile HMM construction
+## STEP IV profile HMM construction
 if [[ EXIT_STATUS -eq 0 ]]
 then
     hmmprof="${OUTPUTPFX}.clean.2.hmm"
@@ -363,12 +334,12 @@ then
         msa=${align2}
         if [[ ${USEAA} -eq 1 ]]
         then
-            info_message "  Start AA to NT alignmetn conversion."
+            info_message "  Start AA to NT alignment conversion."
             msa="${OUTPUTPFX}.clean.2.nucl.maf"
-            ${aa2nucl} --codon_table_id ${CODON} ${align2} ${msa} || EXIT_STATUS=5
+            ${aa2nucl} --codon_table_id ${CODON} ${align2} ${msa} || EXIT_STATUS=4
             TEMPFILES+=(${msa})
-            info_message "  AA to NT alignmetn conversion DONE."
-            if [[ ${EXIT_STATUS} -eq 5 ]]
+            info_message "  AA to NT alignment conversion DONE."
+            if [[ ${EXIT_STATUS} -eq 4 ]]
             then
                 info_message "AA2NUCL conversion return ERROR code."
                 info_message "Exit."
@@ -376,15 +347,15 @@ then
         fi
         if [[ EXIT_STATUS -eq 0 ]]
         then
-            hmmbuild -n ${GENAME} ${hmmprof} ${msa} 1>/dev/null || EXIT_STATUS=5
+            hmmbuild --dna -n ${GENAME} ${hmmprof} ${msa} 1>/dev/null || EXIT_STATUS=4
             info_message "Profile HMM construction DONE."
-            if [[ ${EXIT_STATUS} -eq 5 ]]
+            if [[ ${EXIT_STATUS} -eq 4 ]]
             then
                 info_message "HMMER build return ERROR code."
                 info_message "Exit."
             fi
         fi
-        REDO_FROM=5
+        REDO_FROM=4
     else
         info_message "Skip profile HMM construction. Previously DONE."
     fi

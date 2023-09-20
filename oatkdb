@@ -2,7 +2,6 @@
 
 # make sure these tools are available in system path
 # seqtk https://github.com/lh3/seqtk
-# Rscript https://www.r-project.org/
 # Python https://www.python.org/
 # mafft https://mafft.cbrc.jp/alignment/software/
 # hmmbuild http://hmmer.org/
@@ -22,8 +21,8 @@ oatkdb_usage() {
     echo ""
     echo "  Usage: oatkdb [options] \${taxid} [mitochondrion|chloroplast]"
     echo "  Optional:"
-    echo "      -j|--jobs     INT    Number of parallel jobs to run (default 1)."
-    echo "      -t|--threads  INT    Number of threads to use for each parallel job (default 8)."
+    echo "      -j|--jobs     INT    Number of parallel jobs to run (default 4)."
+    echo "      -t|--threads  INT    Number of threads to use for each parallel job (default 2)."
     echo "      -p|--protein         Use protein instead of nucleotide sequence alignment for coding genes."
     echo "      -c|--codon    INT    NCBI genetic code table for translation (default 1)."
     echo "      -T|--tmpdir   STR    Temp file directory (default auto)."
@@ -31,7 +30,6 @@ oatkdb_usage() {
     echo "      -a|--alias    STR    Gene name alias file."
     echo "      -o|--output   STR    Output HMM profile database file name prefix (default auto)."
     echo "         --max-ref  INT    Maximum number of NCBI reference sequences to download (default 1000000)."
-    echo "         --max-src  INT    Maximum number of source gene sequences to use (default 100000)."
     echo "         --min-seq  INT    Minimum number of sequences to keep a gene (default 5)."
     echo "         --max-seq  INT    Maximum number of sequences to use for HMM (default 10000)."
     echo "         --no-trna         Do not build HMM profiles for tRNA genes."
@@ -111,7 +109,7 @@ then
   exit 1
 fi
 
-seqclean="${PTH}/seqclean.R"
+seqclean="${PTH}/seqclean.py"
 if [ ! -f ${seqclean} ]
 then
   >&2 echo "ERROR: Unable to find ${seqclean}"
@@ -127,7 +125,6 @@ fi
 
 ## check availabilities of dependencies
 check_tool seqtk https://github.com/lh3/seqtk
-check_tool Rscript https://www.r-project.org/
 check_tool python https://www.python.org/
 check_tool mafft https://mafft.cbrc.jp/alignment/software/
 check_tool hmmbuild http://hmmer.org/
@@ -146,7 +143,6 @@ USEAA=0
 CODON=1
 TEMPDIR=""
 MAXREF=1000000
-MAXSRC=100000
 MINSEQ=5
 MAXSEQ=10000
 NOTRNA=0
@@ -174,7 +170,6 @@ do
         -a|--alias   ) ALIAS=$2;     shift; shift;;
         -o|--output  ) OUTPUT=${2};  shift; shift;;
         --max-ref    ) MAXREF=${2};  shift; shift;;
-        --max-src    ) MAXSRC=${2};  shift; shift;;
         --min-seq    ) MINSEQ=${2};  shift; shift;;
         --max-seq    ) MAXSEQ=${2};  shift; shift;;
         --no-trna    ) NOTRNA=1;     shift;;
@@ -263,7 +258,7 @@ then
 fi
 
 ## run program in test mode
-if [[ ${TEST} -eq 1 ]]; then MAXREF=10; MAXSRC=10; MINSEQ=2; MAXSEQ=10; fi
+if [[ ${TEST} -eq 1 ]]; then MAXREF=10; MINSEQ=2; MAXSEQ=10; fi
 
 if [[ ! -d ${TEMPDIR} ]]
 then
@@ -296,7 +291,7 @@ rawGBFile="${TEMPDIR}/rawGBFile.gb"
 efetchJobList="${TEMPDIR}/efetchJobs.list"
 efetchJobFailed="${TEMPDIR}/efetchJobs.failed"
 efetchJobFailed2="${TEMPDIR}/efetchJobs.failed.2"
-checkpoint="${TEMPDIR}/1.done"
+checkpoint="${TEMPDIR}/${STAGE}.done"
 
 TEMPFILES+=(${rawMetaFile})
 TEMPFILES+=(${rawGBFile})
@@ -420,7 +415,7 @@ info_message "Stage ${STAGE} DONE."
 STAGE=$((STAGE+1))
 parsedGBFile="${TEMPDIR}/GBFile.parsed"
 summaryFile="${TEMPDIR}/GBFile.summary"
-checkpoint="${TEMPDIR}/2.done"
+checkpoint="${TEMPDIR}/${STAGE}.done"
 
 TEMPFILES+=(${parsedGBFile})
 TEMPFILES+=(${summaryFile})
@@ -452,7 +447,7 @@ info_message "Stage ${STAGE} DONE."
 STAGE=$((STAGE+1))
 geneListFile="${TEMPDIR}/Gene.list"
 geneSeqDir="${TEMPDIR}/GeneSeqs"
-checkpoint="${TEMPDIR}/3.done"
+checkpoint="${TEMPDIR}/${STAGE}.done"
 
 TEMPFILES+=(${geneListFile})
 TEMPFILES+=(${geneSeqDir})
@@ -467,24 +462,28 @@ extract_seqs () {
     sList=${1}; shift
     info_message "    Processing ${tGene} genes"
     # find sequence count threshold mSeq=MAX(MINSEQ, N50(N50)*0.2, N99)
-    tSeq=$(cat ${sFile} | grep "^${tGene}" | awk '{if ($3>=3) n+=$3}END{print n}')
-    mSeq=$(cat ${sFile} | grep "^${tGene}" | sort -k3n,3r | \
-        awk -v M=${mSeq} -v N=${tSeq} 'BEGIN {n=0; m=0; s=0; t=0; R=N;}
-        {
-            if (n < N*0.8) {
-                R-=$3;
-            } else if (m < R*0.8) {
-                s=$3;  m+=$3;
-            }
-            if (n < N*0.99) t=$3;
-            n+=$3;
-        } END {
-            s=int(s*0.2);
-            if(s<t) s=t;
-            if(s<M) s=M;
-            print s;
-        }')
-    cat ${sFile} | grep "^${tGene}" | awk -v M=${mSeq} '{if($3>=M) print $0}' >> ${sList}
+    thres=3
+    batch=1
+    if [[ ${tGene} == "CDS" ]]; then batch=10; fi
+    if [[ ${tGene} == "tRNA" ]]; then batch=5; fi
+    if [[ ${tGene} == "rRNA" ]]; then batch=1; fi
+    info_message "    Processing ${tGene} genes"
+    # sequence filtering by count
+    # to keep i-th sequence the count must be no samller than thres*M_MED([i-batch:i-1])
+    # where M_MED calculates the median
+    cat ${sFile} | grep "^${tGene}" | sort -k4n,4r | \
+        awk -v M=${mSeq} -v B=${batch} -v T=${thres} '
+            {
+                if ($4 < M) exit;
+                thresh = $4;
+                if (NR > B)
+                    thresh = (counts[int(NR-(B+1)/2)] + counts[int(NR-B/2)]) / 2;
+                if ($4 * T >= thresh)
+                    print;
+                else
+                    exit;
+                counts[NR]=$4;
+            }' >>${sList}
     nSeq=$(cat ${sList} | grep "^${tGene}" | wc -l)
     info_message "      gene sequence count threshold ${mSeq}."
     info_message "      ${nSeq} ${tGene} genes retrieved."
@@ -494,7 +493,7 @@ extract_seqs () {
     rm -f ${sDir}/*
     awk -v T=${tGene} -v D=${sDir} \
         'NR==FNR{if($1==T) t[$2]=1; next} {if($1==T&&t[$2]) print ">"$2"_"$3"_"$5" "$3"\n"$6 >D"/"$2".fna"}' \
-        ${sList} ${gFile}
+        ${sFile} ${gFile}
     info_message "    Processing ${tGene} genes DONE."
 }
 
@@ -506,7 +505,7 @@ then
     rm -rf ${geneSeqDir}/*
     rm -f ${geneListFile}
     info_message "  Start parsing gene sequences."
-    echo -e "#Type\tGene\tCount" >${geneListFile}
+    echo -e "#Type\tGene\tName\tCount" >${geneListFile}
     extract_seqs ${summaryFile} ${parsedGBFile} "CDS" ${MINSEQ} ${geneSeqDir} ${geneListFile}
     if [[ ${NOTRNA} -eq 0 ]]
     then
@@ -527,42 +526,43 @@ info_message "Stage ${STAGE} DONE."
 #************* MODULE IV. SEQUENCE CLEAN AND ALIGNMENT *************
 #*******************************************************************
 STAGE=$((STAGE+1))
-checkpoint="${TEMPDIR}/4.done"
+checkpoint="${TEMPDIR}/${STAGE}.done"
 
 TEMPFILES+=(${checkpoint})
 
 sequence_clean () {
     gType=$1; shift
-    gName=$1; shift
+    gId=$1; shift
     sDir=$1;  shift
     aaSeq=$1; shift
-    mmSrc=$1; shift
     mnSeq=$1; shift
     mmSeq=$1; shift
     nProc=$1; shift
-    pfx="${sDir}/${gType}/${gName}"
+    pfx="${sDir}/${gType}/${gId}"
     fna="${pfx}.fna"
+    # file does not exist
+    if [[ ! -f ${fna} ]]; then exit 0; fi
     # get the average sequence length
-    len=$(seqtk seq -l0 $fna | awk 'BEGIN{B=0; N=0}{if(NR%2==0) {B+=length($1); N++}}END{if(N==0) N=1; print int(B/N)}')
+    len=$(seqtk seq -l0 ${fna} | awk 'BEGIN{B=0; N=0}{if(NR%2==0) {B+=length($1); N++}}END{if(N==0) N=1; print int(B/N)}')
     # clean sequence: remove sequences containing invalid symbols, remove identical sequences from the same species, remove sequences too long or too short
-    mmLine=$((mmSrc*2))
     if [[ ${aaSeq} -eq 1 ]]
     then
-        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mmLine} >${pfx}.clean.fna
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("X","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ARNDCQEGHILKMFPSTWYVXBZJ.]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
     else
-        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' | head -${mmLine} >${pfx}.clean.fna
+        seqtk seq -U -l0 ${fna} | awk -v l=$((len/3)) -v u=$((len*3)) '{if(NR%2==1) header=$0; else {tmp=$0; gsub("N","",tmp); len=length(tmp); if(len>=l && len<=u && $1~/^[ACGTURYWSKMDVHBN]+$/) print header"\n"$0}}' | awk '{if(NR%2==1) {newh=$0; $1=""; newh1=$0} else if(NR%2==0) {if($0==olds&&newh1==oldh1) {next;} else {print newh; print $0; oldh1=newh1; olds=$0}}}' >${pfx}.clean.fna
     fi
     nseq=$(cat ${pfx}.clean.fna | grep "^>" | wc -l)
     # need enough sequences to proceed
     if [[ ${nseq} -lt ${mnSeq} ]]; then exit 0; fi
-    # first round alignment
-    mafft --auto --quiet --thread ${nProc} ${pfx}.clean.fna >${pfx}.clean.maf
-    seqtk seq -l0 ${pfx}.clean.maf >${pfx}.clean.maf.tmp
     # sequence clean by divergence
-    ${seqclean} ${pfx}.clean.maf.tmp ${mmSeq} >${pfx}.clean.maf.tmp.seq 2>/dev/null
-    nseq=$(cat ${pfx}.clean.maf.tmp.seq | wc -l)
-    seqtk subseq ${pfx}.clean.fna ${pfx}.clean.maf.tmp.seq >${pfx}.clean.2.fna
-    rm ${pfx}.clean.maf.tmp ${pfx}.clean.maf.tmp.seq
+    CMD="${seqclean} --rm_iqr_outlier --max_seq ${mmSeq}"
+    if [[ ${aaSeq} -eq 1 ]]
+    then
+        CMD=${CMD}" --protein"
+    fi
+    CMD=${CMD}" ${pfx}.clean.fna ${pfx}.clean.2.fna 2>/dev/null"
+    eval ${CMD}
+    nseq=$(cat ${pfx}.clean.2.fna | grep "^>" | wc -l)
     # need enough sequences to proceed
     if [[ ${nseq} -lt ${mnSeq} ]]; then exit 0; fi
     # second round alignment
@@ -575,7 +575,7 @@ info_message "Stage ${STAGE}: clean and align gene sequences"
 if [[ ! -f ${checkpoint} ]]
 then
     clean_checkpoint ${STAGE}
-    nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
+    nSEQ=$(cat ${summaryFile} | grep -v "^#" | wc -l)
     info_message "  Start cleaning and aligning gene sequences."
     info_message "    Running ${NJOBS} parallel jobs."
     info_message "    Using ${THREADS} cores per job."
@@ -583,9 +583,9 @@ then
     for i in $(seq 1 ${nSEQ})
     do
         wait_until
-        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
-        if [[ $((i%J)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gName}."; fi
-        sequence_clean ${gType} ${gName} ${geneSeqDir} ${USEAA} ${MAXSRC} ${MINSEQ} ${MAXSEQ} ${THREADS} &
+        read -r gType gId gName gCount<<< $(cat ${summaryFile} | grep -v "^#" | head -${i} | tail -1)
+        if [[ $((i%J)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gId}."; fi
+        sequence_clean ${gType} ${gId} ${geneSeqDir} ${USEAA} ${MINSEQ} ${MAXSEQ} ${THREADS} &
     done
     wait
     info_message "  Cleaning and aligning gene sequences DONE."
@@ -600,20 +600,28 @@ info_message "Stage ${STAGE} DONE."
 #*******************************************************************
 STAGE=$((STAGE+1))
 hmmDBName="${TEMPDIR}/DB.fam"
-checkpoint="${TEMPDIR}/5.done"
+hmmDBSummary="${TEMPDIR}/DB.summary"
+hmmALLSummary="${TEMPDIR}/HMM.summary"
+checkpoint="${TEMPDIR}/${STAGE}.done"
 
 TEMPFILES+=(${hmmDBName})
+TEMPFILES+=(${hmmDBSummary})
+TEMPFILES+=(${hmmALLSummary})
 TEMPFILES+=(${checkpoint})
 
 hmm_build () {
     gType=$1; shift
+    gId=$1;   shift
     gName=$1; shift
     sDir=$1;  shift
     aaSeq=$1; shift
-    pfx="${sDir}/${gType}/${gName}"
+    sFile=$1; shift
+    pfx="${sDir}/${gType}/${gId}"
     msa="${pfx}.clean.2.maf"
     # MSA does not exist
     if [[ ! -f ${msa} ]]; then exit 0; fi
+    # no sequence
+    if [[ $(cat ${msa} | grep "^>" | wc -l) -lt 1 ]]; then exit 0; fi
     # convert AA alignment to NT alignment
     # as described https://academic.oup.com/bioinformatics/article/31/11/1836/2365396
     if [[ ${gType} == "CDS" ]] && [[ ${aaSeq} -eq 1 ]]
@@ -622,7 +630,8 @@ hmm_build () {
         msa="${pfx}.clean.2.nucl.maf"
         TEMPFILES+=(${msa})
     fi
-    hmmbuild -n ${gName} ${pfx}.clean.2.hmm ${msa} 1>/dev/null
+    hmmbuild --dna -n ${gName} ${pfx}.clean.2.hmm ${msa} 1>/dev/null
+    echo -e "${gType}\t${gId}\t${gName}\t$(cat ${pfx}.clean.2.hmm | grep ^NSEQ | awk '{print $2}')" >>${sFile}
 }
 
 J=10 # job interval to verbose
@@ -630,8 +639,9 @@ info_message "Stage ${STAGE}: profile HMM construction"
 if [[ ! -f ${checkpoint} ]]
 then
     clean_checkpoint ${STAGE}
-    rm -f ${hmmDBName}
-    nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
+    rm -f ${hmmDBName} ${hmmDBSummary} ${hmmALLSummary}
+    echo -e "#Type\tGene\tName\tNSEQ" >${hmmALLSummary}
+    nSEQ=$(cat ${summaryFile} | grep -v "^#" | wc -l)
     info_message "  Start constructing HMM profiles."
     info_message "    Running ${NCORE} parallel jobs."
     info_message "    Using 1 core per job."
@@ -639,17 +649,27 @@ then
     for i in $(seq 1 ${nSEQ})
     do
         wait_until ${NCORE}
-        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
-        if [[ $((i%10)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gName}."; fi
-        hmm_build ${gType} ${gName} ${geneSeqDir} ${USEAA} &
+        read -r gType gId gName gCount<<< $(cat ${summaryFile} | grep -v "^#" | head -${i} | tail -1)
+        if [[ $((i%10)) -eq 0 ]]; then info_message "      Job ${i}/${nSEQ} submitted: ${gType} ${gId}."; fi
+        hmm_build ${gType} ${gId} ${gName} ${geneSeqDir} ${USEAA} ${hmmALLSummary} &
     done
     wait
     info_message "    Collecting individual HMM profile for each gene."
+    echo -e "#Type\tGene\tName\tNSEQ" >${hmmDBSummary}
+    nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
     for i in $(seq 1 ${nSEQ})
     do
-        read -r gType gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
+        read -r gType gId gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
         hmmfile="${geneSeqDir}/${gType}/${gName}.clean.2.hmm"
-        if [[ -f  ${hmmfile} ]]; then cat ${hmmfile} >> ${hmmDBName}; fi
+        if [[ -f  ${hmmfile} ]]
+        then
+            NSEQ=$(cat ${hmmfile} | grep ^NSEQ | awk '{print $2}')
+            if [[ ${NSEQ} -ge ${MINSEQ} ]]
+            then
+                cat ${hmmfile} >> ${hmmDBName}
+                echo -e "${gType}\t${gId}\t${gName}\t${NSEQ}" >>${hmmDBSummary}
+            fi
+        fi
     done
     info_message "    Collecting individual HMM profiles DONE."
     info_message "    Making HMM database."

@@ -148,11 +148,21 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, include_ORF,
                     if product:
                         product = product.lower()
                         match = re.search(r'(\d+(\.\d+)?)s?[\s\t]*ribosom(al|e)[\s\t]*rna', product)
+                    # to rescue rRNA genes with note information
+                    if not match:
+                        note = feature.qualifiers.get("note", [""])[0]
+                        if note:
+                            note = note.lower()
+                        match = re.search(r'(\d+(\.\d+)?)s?[\s\t]*ribosom(al|e)[\s\t]*rna', note)
+
                 if match:
                     gene = f"rrn{match.group(1)}"
+                else:
+                    gene = ""
 
             if feature.type == "CDS":
-                if not include_ORF and re.match(r'^[O|o][R|r][F|f].*', gene):
+                # TODO is this safe for ORF checking?
+                if not include_ORF and re.match(r'.*[O|o][R|r][F|f].*', gene):
                     gene = ""
 
                 if gene and cds_translation:
@@ -282,10 +292,10 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
 
     # Write the summary file, sorted by counts
     with open(summary_file, "w") as summary_output:
-        summary_output.write("#Type\tGene\tCount\n")
+        summary_output.write("#Type\tGene\tName\tCount\n")
         for gene, count in sorted_gene_counts:
-            tgene=gene.replace('_', '\t', 1)
-            summary_output.write(f"{tgene}\t{count}\n")
+            tgene=gene.split('_', 1)
+            summary_output.write(f"{tgene[0]}\t{tgene[1]}\t{tgene[1]}\t{count}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract coding genes (CDS), tRNA, and rRNA genes from a GenBank file with multiple sequences, store them in a list, sort by gene types and names, and output in tabular format with a summary file sorted by counts. Optionally, specify a genetic code table and decide whether to include tRNA and rRNA, and to write translation sequences for coding genes.")

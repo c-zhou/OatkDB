@@ -110,7 +110,8 @@ outdir=$(dirname ${OUTPUT})
 mkdir -p ${outdir} 2>/dev/null || \
     (>&2 echo "ERROR: create output dir '${outdir}' failed"; exit 1)
 
-hmmDBName="${TEMPDIR}/DB.fam"
+hmmDBName="${TEMPDIR}/DB.curated.fam"
+hmmDBSummary="${TEMPDIR}/DB.curated.summary"
 geneSeqDir="${TEMPDIR}/GeneSeqs"
 
 if [[ ! -d ${geneSeqDir} ]]
@@ -119,17 +120,24 @@ then
     exit 1
 fi
 
-rm -f ${hmmDBName}
+rm -f ${hmmDBName} ${hmmDBSummary}
 nSEQ=$(cat ${GENLIST} | grep -v "^#" | wc -l)
 nGEN=0
 
 info_message "Starting HMM profile database curation."
 info_message "  Collecting individual HMM profile for each gene."
+echo -e "#Type\tGene\tName\tNSEQ" >${hmmDBSummary}
 for i in $(seq 1 ${nSEQ})
 do
-    read -r gType gName gCount<<< $(cat ${GENLIST} | grep -v "^#" | head -${i} | tail -1)
-    hmmfile="${geneSeqDir}/${gType}/${gName}.clean.2.hmm"
-    if [[ -f  ${hmmfile} ]]; then cat ${hmmfile} >> ${hmmDBName}; nGEN=$((nGEN+1)); fi
+    read -r gType gId gName gCount<<< $(cat ${GENLIST} | grep -v "^#" | head -${i} | tail -1)
+    hmmfile="${geneSeqDir}/${gType}/${gId}.clean.2.hmm"
+    if [[ -z ${gName} ]]; then gName=gId; fi
+    if [[ -f  ${hmmfile} ]]
+    then
+        cat ${hmmfile} | sed -E "s/(^NAME\s+)([^\s]+$)/\1${gName}/" >> ${hmmDBName}
+        echo -e "${gType}\t${gId}\t${gName}\t$(cat ${hmmfile} | grep ^NSEQ | awk '{print $2}')" >>${hmmDBSummary}
+        nGEN=$((nGEN+1))
+    fi
 done
 info_message "    [${nGEN}] genes collected."
 info_message "  Collecting individual HMM profiles DONE."
