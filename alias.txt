@@ -1,7 +1,7 @@
 COX1    ^[Cc][Oo][Xx]?(1|I)$
 COX2    ^[Cc][Oo][Xx]?(2|II)$
 COX3    ^[Cc][Oo][Xx]?(3|III)$
-cytb    ^[Cc][Yy][Tt]?o?-?[Bb]$
+cytb    ^[Cc]([Yy][Tt]?|[Oo]|[Yy][Tt][Oo])-?[Bb]$
 ND4L    ^[Nn][Aa]?[Dd][Hh]?4[Ll]$
 ND(1)   ^[Nn][Aa]?[Dd][Hh]?(\d{1})$
 ndh(1)  ^[Nn][Aa]?[Dd][Hh]?([a-zA-Z]{1})$
