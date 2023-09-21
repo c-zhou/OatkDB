@@ -1,0 +1,7 @@
+Date:            20230921
+Version:         v20230921
+Parent version:  N/A
+Description:     This is the first version constructed with the automation scripts
+                 Core gene set was changed
+                 HMM profiles for all genes were changed
+                 Added three taxonomies - embryophyta, mammalia and dikarya
