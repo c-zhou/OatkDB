@@ -250,7 +250,7 @@ then
         # need enough sequences to proceed
         if [[ ${nseq} -lt ${MINSEQ} ]]
         then
-            info_message "Not enough sequences to proceed"
+            info_message "No enough sequences to proceed"
             info_message "Exit."
             EXIT_STATUS=1
         fi
@@ -272,7 +272,7 @@ then
         info_message "Start second round sequence clean."
         # sequence clean by divergence
         CMD="${seqclean} --rm_iqr_outlier --max_seq ${MAXSEQ}"
-        if [[ ${USEAA} -eq 1 ]]
+        if [[ ${gType} == "CDS" ]] && [[ ${USEAA} -eq 1 ]]
         then
             CMD=${CMD}" --protein"
         fi
@@ -285,7 +285,7 @@ then
         # need enough sequences to proceed
         if [[ ${nseq} -lt ${MINSEQ} ]]
         then
-            info_message "Not enough sequences to proceed"
+            info_message "No enough sequences to proceed"
             info_message "Exit."
             EXIT_STATUS=2
         fi

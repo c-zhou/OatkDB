@@ -556,7 +556,7 @@ sequence_clean () {
     if [[ ${nseq} -lt ${mnSeq} ]]; then exit 0; fi
     # sequence clean by divergence
     CMD="${seqclean} --rm_iqr_outlier --max_seq ${mmSeq}"
-    if [[ ${aaSeq} -eq 1 ]]
+    if [[ ${gType} == "CDS" ]] && [[ ${aaSeq} -eq 1 ]]
     then
         CMD=${CMD}" --protein"
     fi
