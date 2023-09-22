@@ -66,12 +66,13 @@ def sequence_kmer_frequency(fasta_records, k, kmer_counts, len_median):
 def kmer_stats(kmer_counts):
     total_num_kmers = sum(kmer_counts.values())
     unique_kmers = len(kmer_counts)
-    max_kmer = max(kmer_counts, key=kmer_counts.get)
-    min_kmer = min(kmer_counts, key=kmer_counts.get)
     sys.stderr.write(f'total number of kmers: {total_num_kmers}\n')
     sys.stderr.write(f'unique kmers:          {unique_kmers}\n')
-    sys.stderr.write(f'largest kmer count:    [{max_kmer}:{kmer_counts[max_kmer]}]\n')
-    sys.stderr.write(f'smallest kmer count:   [{min_kmer}:{kmer_counts[min_kmer]}]\n')
+    if unique_kmers:
+        max_kmer = max(kmer_counts, key=kmer_counts.get)
+        min_kmer = min(kmer_counts, key=kmer_counts.get)
+        sys.stderr.write(f'largest kmer count:    [{max_kmer}:{kmer_counts[max_kmer]}]\n')
+        sys.stderr.write(f'smallest kmer count:   [{min_kmer}:{kmer_counts[min_kmer]}]\n')
 
 def sequence_filter_by_kmer_frequency(fasta_file, is_protein, kmer_size, rm_iqr_outlier, max_seq, output_file):
     # read sequences from the FASTA file
@@ -141,10 +142,13 @@ if __name__ == "__main__":
     parser.add_argument("fasta_file", type=str, nargs="?", default=None, help="Input FASTA file (default: stdin)")
     parser.add_argument("output_file", type=str, nargs="?", default=None, help="Output file name (default: stdout)")
     parser.add_argument("--protein", action="store_true", help="The input is protein sequences")
-    parser.add_argument("--kmer_size", type=int, default=12, help="K-mer size (default: 12)")
+    parser.add_argument("--kmer_size", type=int, default=0, help="K-mer size (default: 12 for NT and 6 for AA)")
     parser.add_argument("--rm_iqr_outlier", action="store_true", help="Remove outlier sequences with IQR method")
     parser.add_argument("--max_seq", type=int, default=None, help="Maximum number of sequences to keep (default: 0)")
     args = parser.parse_args()
     
+    if not args.kmer_size:
+        args.kmer_size = 6 if args.protein else 12
+
     sequence_filter_by_kmer_frequency(args.fasta_file, args.protein, args.kmer_size, args.rm_iqr_outlier, args.max_seq, args.output_file)
 
