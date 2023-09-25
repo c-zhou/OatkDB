@@ -2,6 +2,28 @@ Date:            20230921
 Version:         v20230921
 Parent version:  N/A
 Description:     This is the first version constructed with the automation scripts
+                 The gene sequences were downloaded from NCBI database on 20230921
                  Core gene set was changed
                  HMM profiles for all genes were changed
-                 Added four taxonomies - embryophyta, mammalia, insecta and dikarya
+                 Eight taxonomies in the previous version (database names changed)
+                   1437180 acrogymnospermae (gymnosperms)
+                   13809 anthocerotophyta (hornworts)
+                   3208 bryophyta (mosses)
+                   1521260 lycopodiopsida (lycopods)
+                   3398 magnoliopsida (angiosperms)
+                   3195 marchantiophyta (liverworts)
+                   241806 polypodiopsida (ferns)
+                   7399 hymenoptera (hymenopterans)
+                 Twelve taxonomies added in this version
+                   3193 embryophyta (land plants)
+                   451864 dikarya (fungi)
+                   7898 actinopterygii (ray-finned fishes)
+                   8782 aves (birds)
+                   40674 mammalia (mammals)
+                   50557 insecta (true insects)
+                   6893 araneae (spiders)
+                   8292 amphibia (amphibians)
+                   1294634 crocodylia (alligators)
+                   8459 testudines (turtles)
+                   8570 serpentes (snakes)
+                   8504 lepidosauria (lizards & snakes)

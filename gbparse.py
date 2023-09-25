@@ -51,7 +51,8 @@ class Alias:
             target_string = str(self.target_string)
             # Replace "(1)", "(2)", etc., in the target_string with the matched groups
             for i, group in enumerate(matched_groups, 1):
-                target_string = target_string.replace(f'({i})', group)
+                if group:
+                    target_string = target_string.replace(f'({i})', group)
 
             return True, target_string
         else:

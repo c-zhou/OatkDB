@@ -1,12 +1,20 @@
-angiosperm  3398
-dikarya     451864
-embryophyta 3193
-fern        241806
-gymnosperm  1437180
-hornwort    13809
-hymenoptera 7399
-insecta     50557
-liverwort   3195
-lycopod     1521260
-mammalia    40674
-moss        3208
+acrogymnospermae  1437180  gymnosperms, seed plants
+actinopterygii    7898     ray-finned fishes
+amphibia          8292     amphibians
+anthocerotophyta  13809    hornworts
+araneae           6893     spiders
+aves              8782     birds
+bryophyta         3208     mosses
+crocodylia        1294634  alligators
+dikarya           451864   fungi
+embryophyta       3193     land plants
+hymenoptera       7399     hymenopterans
+insecta           50557    true insects
+lepidosauria      8504     lepidosaurs, lizards & snakes
+lycopodiopsida    1521260  lycopods, clubmosses
+magnoliopsida     3398     angiosperms, flowering plants
+mammalia          40674    mammals
+marchantiophyta   3195     liverworts
+polypodiopsida    241806   ferns
+serpentes         8570     snakes
+testudines        8459     turtles
