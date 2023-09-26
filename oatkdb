@@ -460,7 +460,6 @@ extract_seqs () {
     mSeq=${1};  shift
     sDir=${1};  shift
     sList=${1}; shift
-    info_message "    Processing ${tGene} genes"
     # find sequence count threshold mSeq=MAX(MINSEQ, N50(N50)*0.2, N99)
     thres=3
     batch=1
