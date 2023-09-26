@@ -186,6 +186,10 @@ def extract_genes(record, genetic_code, include_tRNA, include_rRNA, include_ORF,
 
 def parse_alias_file(input_alias_file):
     aliases = []
+
+    if not input_alias_file:
+        return aliases
+
     with open(input_alias_file, "r") as alias_file:
         for line in alias_file:
             line = line.strip()
@@ -240,6 +244,7 @@ def parse_genbank_file(input_genbank_file, output_file, summary_file, genetic_co
     name_aliases = defaultdict(str)
     gene_set = set(map(lambda item: item[1], gene_list))
     for gene in gene_set:
+        name_alias = gene
         for alias in aliases:
             matched, name_alias = alias.alias_string_format(gene)
             if matched:
