@@ -27,3 +27,9 @@ Description:     This is the first version constructed with the automation scrip
                    8459 testudines (turtles)
                    8570 serpentes (snakes)
                    8504 lepidosauria (lizards & snakes)
+                 One taxonomy added on 20231003
+                   6447 mollusca (molluscs)
+                 Plant database cleaned on 20231204
+                   Chloroplast genes removed: lhbA, pafI, pafII, pafII, pbf1, pbsH
+                                              pdbZ, psal, psb30, ycf5, ycf6, ycf9
+                   Mitochondria genes removed: atpA, matK, tatC

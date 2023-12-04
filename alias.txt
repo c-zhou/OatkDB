@@ -7,3 +7,4 @@ ND(1)   ^[Nn][Aa]?[Dd][Hh]?(\d{1})$
 ndh(1)  ^[Nn][Aa]?[Dd][Hh]?([a-zA-Z]{1})$
 ATP(2)  ^[Aa][Tt][Pp]([Aa][Ss][Ee])?([6|8])$
 clpP    ^[Cc][Ll][Pp][Pp][0-9]?$
+mttB    ^[Tt][Aa][Tt][Cc]$

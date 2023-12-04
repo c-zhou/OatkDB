@@ -142,7 +142,7 @@ done
 info_message "    [${nGEN}] genes collected."
 info_message "  Collecting individual HMM profiles DONE."
 info_message "  Making HMM database."
-cp ${hmmDBName} ${OUTPUT}.fam
+if [[ ! -f ${OUTPUT}.fam ]]; then cp ${hmmDBName} ${OUTPUT}.fam; fi
 hmmpress ${OUTPUT}.fam 1>/dev/null
 info_message "  Making HMM database DONE."
 info_message "HMM profile database curation DONE."

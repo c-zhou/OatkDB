@@ -139,7 +139,7 @@ while [[ ${#} -gt 0 ]]
 do
     key=${1}
     case ${key} in
-        -n|--name    ) GENAME=${2};   shift; shift;;
+        -n|--name    ) GENAME=${2};  shift; shift;;
         -t|--threads ) THREADS=${2}; shift; shift;;
         -p|--protein ) USEAA=1;      shift;;
         -c|--codon   ) CODON=${2};   shift; shift;;
