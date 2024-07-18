@@ -80,7 +80,7 @@ def is_valid_char(char):
 
 # Extract the start and end positions
 def location_string(location):
-    return f"{location.nofuzzy_start}-{location.nofuzzy_end}"
+    return f"{int(location.start)}-{int(location.end)}"
 
 def extract_genes(record, genetic_code, include_tRNA, include_rRNA, include_ORF, check_codon, cds_translation):
     genes = []
