@@ -656,9 +656,8 @@ then
     info_message "    Collecting individual HMM profile for each gene."
     echo -e "#Type\tGene\tName\tNSEQ" >${hmmDBSummary}
     nSEQ=$(cat ${geneListFile} | grep -v "^#" | wc -l)
-    for i in $(seq 1 ${nSEQ})
+    while read -r gType gId gName gCount
     do
-        read -r gType gId gName gCount<<< $(cat ${geneListFile} | grep -v "^#" | head -${i} | tail -1)
         hmmfile="${geneSeqDir}/${gType}/${gName}.clean.2.hmm"
         if [[ -f  ${hmmfile} ]]
         then
@@ -669,7 +668,7 @@ then
                 echo -e "${gType}\t${gId}\t${gName}\t${NSEQ}" >>${hmmDBSummary}
             fi
         fi
-    done
+    done < <(cat ${geneListFile} | grep -v "^#" | head -${nSEQ} | sort -k1,1V -k3,3V)
     info_message "    Collecting individual HMM profiles DONE."
     info_message "    Making HMM database."
     cp ${hmmDBName} ${OUTPUT}.fam

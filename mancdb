@@ -14,6 +14,7 @@ mancdb_usage() {
     echo "  Usage: mancdb [options] gene_list tmpdir output"
     echo "  Optional:"
     echo "      -f|--force           Overwrite existing files."
+    echo "      -s|--sort            Sort gene by names."
     echo "         --log      STR    Log file (default stdout)."
     echo "      -h|--help            Print this help message."
     echo "      -v|--version         Print version number."
@@ -51,6 +52,7 @@ GENLIST=""
 TEMPDIR=""
 OUTPUT=""
 FORCE=0
+SORTN=0
 LOGFILE="/dev/stdout"
 HELP=0
 VERSION=0
@@ -60,6 +62,7 @@ do
     key=${1}
     case ${key} in
         -f|--force   ) FORCE=1;      shift;;
+        -s|--sort    ) SORTN=1;      shift;;
         --log        ) LOGFILE=${2}; shift; shift;;
         -h|--help    ) HELP=1;       shift;;
         -v|--version ) VERSION=1;    shift;;
@@ -124,12 +127,14 @@ rm -f ${hmmDBName} ${hmmDBSummary}
 nSEQ=$(cat ${GENLIST} | grep -v "^#" | wc -l)
 nGEN=0
 
+sortByName="cat"
+if [[ ${SORTN} -eq 1 ]]; then sortByName="sort -k1,1V -k3,3V"; fi
+
 info_message "Starting HMM profile database curation."
 info_message "  Collecting individual HMM profile for each gene."
 echo -e "#Type\tGene\tName\tNSEQ" >${hmmDBSummary}
-for i in $(seq 1 ${nSEQ})
+while read -r gType gId gName gCount
 do
-    read -r gType gId gName gCount<<< $(cat ${GENLIST} | grep -v "^#" | head -${i} | tail -1)
     hmmfile="${geneSeqDir}/${gType}/${gId}.clean.2.hmm"
     if [[ -z ${gName} ]]; then gName=gId; fi
     if [[ -f  ${hmmfile} ]]
@@ -138,7 +143,7 @@ do
         echo -e "${gType}\t${gId}\t${gName}\t$(cat ${hmmfile} | grep ^NSEQ | awk '{print $2}')" >>${hmmDBSummary}
         nGEN=$((nGEN+1))
     fi
-done
+done < <(cat ${GENLIST} | grep -v "^#" | head -${nSEQ} | ${sortByName})
 info_message "    [${nGEN}] genes collected."
 info_message "  Collecting individual HMM profiles DONE."
 info_message "  Making HMM database."

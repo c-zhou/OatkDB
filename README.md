@@ -112,6 +112,7 @@ Here is the full list of the options, which can be shown with the command `mancd
   Usage: mancdb [options] gene_list tmpdir output
   Optional:
       -f|--force           Overwrite existing files.
+      -s|--sort            Sort gene by names.
          --log      STR    Log file (default stdout).
       -h|--help            Print this help message.
       -v|--version         Print version number.
