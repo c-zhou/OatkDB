@@ -205,9 +205,9 @@ then
     exit 1
 fi
 
-if [[ ${ORGANELLE} != "mitochondrion" ]] && [[ ${ORGANELLE} != "chloroplast" ]]
+if [[ ${ORGANELLE} != "mitochondrion" ]] && [[ ${ORGANELLE} != "chloroplast" ]] && [[ ${ORGANELLE} != "plastid" ]]
 then
-    >&2 echo "ERROR: organelle must be 'mitochondrion' or 'chloroplast'"
+    >&2 echo "ERROR: organelle must be 'mitochondrion' or 'chloroplast' or 'plastid'"
     >&2 oatkdb_usage
     exit 1
 fi
