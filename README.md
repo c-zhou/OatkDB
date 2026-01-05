@@ -19,7 +19,7 @@ Other dependencies include:
 These tools must be available in the system path, i.e., add them to the `$PATH` environmental variable. The program will check the availabilities of the dependencies before doing any actual work.
 
 ## Oatkdb
-This is the major tool for building a database. It takes two positional parameters: the NCBI taxonomy ID of the species and the organelle type (mitochondria or chloroplast). Here is how it works: (1) download all sequences in GenBank format from the NCBI database given the user-specified NCBI taxonomy and the organelle type; (2) parse the GenBank files of the source reference sequences to find core genes including protein-coding, rRNA and tRNA (mainly by the frequency seen in the source sequences) and extract corresponding sequences; (3) sequence clean to remove outlier/error-prone sequences considering sequence length, content, and divergence; (4) sequence multiple alignment, and finally (5) profile HMM construction.
+This is the major tool for building a database. It takes two positional parameters: the NCBI taxonomy ID of the species and the organelle type (mitochondria, chloroplast, or plastid). Here is how it works: (1) download all sequences in GenBank format from the NCBI database given the user-specified NCBI taxonomy and the organelle type; (2) parse the GenBank files of the source reference sequences to find core genes including protein-coding, rRNA and tRNA (mainly by the frequency seen in the source sequences) and extract corresponding sequences; (3) sequence clean to remove outlier/error-prone sequences considering sequence length, content, and divergence; (4) sequence multiple alignment, and finally (5) profile HMM construction.
 
 It is worth noting that the whole pipeline is quite computationally intensive, especially the multiple alignment step, so it is critical to give as many CPUs as possible. This is controlled by the `-j` and `-t` options. Also, the tool can resume a failed run (`--resume` option), for which the intermediate/temporary files are needed, so it is highly recommended to keep them during the run (i.e., run the tool WITHOUT the `--clean` option). The intermediate files also contain many useful information. The temporary folder is also a mandatory input for `mancdb` (see below).
 
@@ -29,7 +29,7 @@ Here is the full list of the options, which can be shown with the command `oatkd
   Program: oatkdb (build gene HMM profile database for an NCBI taxonomy)
   Version: 1.0
 
-  Usage: oatkdb [options] ${taxid} [mitochondrion|chloroplast]
+  Usage: oatkdb [options] ${taxid} [mitochondrion|chloroplast|plastid]
   Optional:
       -j|--jobs     INT    Number of parallel jobs to run (default 4).
       -t|--threads  INT    Number of threads to use for each parallel job (default 2).
